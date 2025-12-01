@@ -200,6 +200,29 @@ The `-t, --conversation-filter` flag enables filtering by contact names, phone n
 
 The `ContactResolver` (`src/resolvers/contacts.rs`) uses `ContactsIndex` for resolving handle identifiers to contact names. It caches lookup results for performance and returns the custom name for messages sent by the database owner.
 
+### Avatar Support
+
+The `--include-avatars` flag enables extraction and export of participant avatars from the macOS Contacts database. Implementation details:
+
+**AvatarManager (`src/avatar_manager.rs`):** Handles copying avatar image files from the contacts database to the output directory. Uses SHA256 hashing for content-based deduplication - multiple participants with the same avatar image will only store one copy. Returns relative paths in the format `avatars/<hash>.jpg`.
+
+**Avatar Query (`src/contacts.rs:get_avatar_paths`):** Extends `ContactsIndex` with avatar support. Queries the `ZABCDIMAGEDATA` table to find avatar image paths for each contact. Maps phone numbers and email addresses to avatar file paths. Returns `HashMap<String, PathBuf>` mapping participant identifiers to source avatar paths.
+
+**SQL Query:** Joins `ZABCDRECORD` (contacts), `ZABCDPHONENUMBER`/`ZABCDEMAILADDRESS` (contact details), and `ZABCDIMAGEDATA` (avatar metadata) tables. Avatar images are stored in `Images/` subdirectory relative to the contacts database.
+
+**SerializableParticipant (`src/serialization/participant.rs`):** Structure representing a conversation participant with contact information and optional avatar path. Fields: `handle_id` (i32), `identifier` (String), `contact_name` (Option<String>), `avatar_path` (Option<String>). The `avatar_path` field is set to `null` if no avatar is available.
+
+**Participants Files:** For each conversation, creates a `chat_XX_participants.ndjson` file containing one JSON object per line, one for each participant. Written after the main chat export completes.
+
+**Integration (`exporter.rs`):**
+1. Query avatar paths from contacts database before creating `ContactResolver` (ownership requirement)
+2. Create `AvatarManager` if `--include-avatars` flag is specified
+3. Cache `ChatToHandle` relationships to map chats to participant handle IDs
+4. After exporting each chat's messages, call `write_participants_file()` to create the participants NDJSON file
+5. For each participant, look up avatar source path and copy using `AvatarManager`
+
+**Borrow Checker Note:** Avatar paths must be queried BEFORE creating `ContactResolver` because the resolver consumes the `ContactsIndex`. The avatar paths `HashMap` is then passed separately to the participant writing logic.
+
 ### Database Access
 
 Always use the imessage-database library's abstractions (`Table` trait, `stream()` methods) rather than writing raw SQL. This ensures compatibility across different iOS/macOS versions.

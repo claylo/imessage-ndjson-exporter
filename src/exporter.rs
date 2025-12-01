@@ -4,9 +4,10 @@ use imessage_database::{
     tables::{
         attachment::Attachment,
         chat::Chat,
+        chat_handle::ChatToHandle,
         handle::Handle,
         messages::{models::GroupAction, Message},
-        table::{get_connection, Table},
+        table::{get_connection, Cacheable, Table},
     },
     util::{platform::Platform, query_context::QueryContext},
 };
@@ -22,13 +23,17 @@ use std::{
 
 use crate::{
     attachment_manager::{AttachmentManager, CompressionMode},
+    avatar_manager::AvatarManager,
     contacts::ContactsIndex,
     resolvers::{ContactResolver, TapbackResolver},
     serialization::{
         attachments::{AttachmentDimensions, SerializableAttachment},
         chat::{SerializableChatContext, SerializableSender},
         content::{ContentComponent, SerializableContent, TextAttribute, TextEffect},
-        message::{MessageMetadata, SerializableAnnouncement, SerializableGroupAction, SerializableMessage},
+        message::{
+            MessageMetadata, SerializableAnnouncement, SerializableGroupAction, SerializableMessage,
+        },
+        participant::SerializableParticipant,
         relationships::SerializableRelationships,
     },
 };
@@ -46,6 +51,7 @@ pub struct NdjsonExporter {
     embed_attachments: bool,
     max_embed_size: usize,
     embed_compression: CompressionMode,
+    include_avatars: bool,
 }
 
 impl NdjsonExporter {
@@ -62,6 +68,7 @@ impl NdjsonExporter {
         embed_attachments: bool,
         max_embed_size: usize,
         embed_compression: CompressionMode,
+        include_avatars: bool,
     ) -> Result<Self> {
         Ok(Self {
             database_path: database_path.to_path_buf(),
@@ -76,6 +83,7 @@ impl NdjsonExporter {
             embed_attachments,
             max_embed_size,
             embed_compression,
+            include_avatars,
         })
     }
 
@@ -104,8 +112,7 @@ impl NdjsonExporter {
 
         // Build deduplication map (for ContactsIndex.build_participants_map)
         // For simplicity, map each handle to itself (no deduplication)
-        let deduped_handles: HashMap<i32, i32> =
-            handles.keys().map(|&id| (id, id)).collect();
+        let deduped_handles: HashMap<i32, i32> = handles.keys().map(|&id| (id, id)).collect();
 
         // Use ContactsIndex to build participants map with Names
         let participants_with_names =
@@ -125,9 +132,8 @@ impl NdjsonExporter {
         let mut chatroom_participants: HashMap<i32, HashSet<i32>> = HashMap::new();
 
         // Query chat_handle_join table to get participants for each chat
-        let mut stmt = db.prepare(
-            "SELECT chat_id, handle_id FROM chat_handle_join ORDER BY chat_id",
-        )?;
+        let mut stmt =
+            db.prepare("SELECT chat_id, handle_id FROM chat_handle_join ORDER BY chat_id")?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let chat_id: i32 = row.get(0)?;
@@ -213,7 +219,7 @@ impl NdjsonExporter {
             println!("Building caches...");
         }
 
-        let (chats, handles, tapbacks) = self.build_caches(&db)?;
+        let (chats, handles, tapbacks, chatroom_participants) = self.build_caches(&db)?;
 
         // Build ContactsIndex if filter is specified
         let contacts_index = if self.conversation_filter.is_some() {
@@ -249,7 +255,16 @@ impl NdjsonExporter {
             None
         };
 
-        // Build contact resolver
+        // Query avatar paths before moving contacts_index into ContactResolver
+        let avatar_paths = if self.include_avatars {
+            contacts_index
+                .get_avatar_paths(self.contacts_path.as_deref(), None)
+                .unwrap_or_else(|_| HashMap::new())
+        } else {
+            HashMap::new()
+        };
+
+        // Build contact resolver (consumes contacts_index)
         let mut contact_resolver = ContactResolver::new(contacts_index, self.custom_name.clone());
 
         // Create attachment manager if copying or embedding is enabled
@@ -261,6 +276,13 @@ impl NdjsonExporter {
                 Platform::macOS,
                 self.database_path.clone(),
             ))
+        } else {
+            None
+        };
+
+        // Create avatar manager if avatars are enabled
+        let mut avatar_manager = if self.include_avatars {
+            Some(AvatarManager::new(&self.output_dir))
         } else {
             None
         };
@@ -304,6 +326,18 @@ impl NdjsonExporter {
                 offset,
             )?;
 
+            // Write participants file if avatars are enabled
+            if self.include_avatars {
+                self.write_participants_file(
+                    *chat_id,
+                    &handles,
+                    &chatroom_participants,
+                    &mut contact_resolver,
+                    &mut avatar_manager,
+                    &avatar_paths,
+                )?;
+            }
+
             total_messages += message_count;
 
             if let Some(ref pb) = progress {
@@ -315,7 +349,10 @@ impl NdjsonExporter {
             pb.finish_with_message("Export complete");
         }
 
-        println!("\n✅ Exported {} messages from {} chats", total_messages, total_chats);
+        println!(
+            "\n✅ Exported {} messages from {} chats",
+            total_messages, total_chats
+        );
 
         Ok(())
     }
@@ -327,6 +364,7 @@ impl NdjsonExporter {
         HashMap<i32, Chat>,
         HashMap<i32, Handle>,
         TapbackResolver,
+        HashMap<i32, BTreeSet<i32>>,
     )> {
         // Build chat cache
         let mut chats = HashMap::new();
@@ -359,7 +397,12 @@ impl NdjsonExporter {
             Ok::<(), anyhow::Error>(())
         });
 
-        Ok((chats, handles, tapbacks))
+        // Build chat-to-handle cache (participant membership)
+        let chatroom_participants = ChatToHandle::cache(db).map_err(|e| {
+            anyhow::anyhow!("Failed to cache chat-to-handle relationships: {:?}", e)
+        })?;
+
+        Ok((chats, handles, tapbacks, chatroom_participants))
     }
 
     fn export_chat(
@@ -394,7 +437,10 @@ impl NdjsonExporter {
 
                 // Generate message text and components
                 if let Err(e) = msg.generate_text(db) {
-                    eprintln!("Warning: Failed to generate text for message {}: {}", msg.guid, e);
+                    eprintln!(
+                        "Warning: Failed to generate text for message {}: {}",
+                        msg.guid, e
+                    );
                 }
 
                 // Convert to serializable format
@@ -446,7 +492,8 @@ impl NdjsonExporter {
             "announcement"
         } else {
             "normal"
-        }.to_string();
+        }
+        .to_string();
 
         // Build metadata
         let metadata = MessageMetadata {
@@ -489,7 +536,7 @@ impl NdjsonExporter {
             thread_originator_guid: msg.thread_originator_guid.clone(),
             thread_originator_part: msg.thread_originator_part.clone(),
             num_replies: msg.num_replies,
-            tapbacks: vec![], // TODO: Implement tapback resolution
+            tapbacks: vec![],   // TODO: Implement tapback resolution
             edit_history: None, // TODO: Implement edit history
         };
 
@@ -513,12 +560,8 @@ impl NdjsonExporter {
                             new_name: name.to_string(),
                         },
                         GroupAction::ParticipantLeft => SerializableGroupAction::ParticipantLeft,
-                        GroupAction::GroupIconChanged => {
-                            SerializableGroupAction::GroupIconChanged
-                        }
-                        GroupAction::GroupIconRemoved => {
-                            SerializableGroupAction::GroupIconRemoved
-                        }
+                        GroupAction::GroupIconChanged => SerializableGroupAction::GroupIconChanged,
+                        GroupAction::GroupIconRemoved => SerializableGroupAction::GroupIconRemoved,
                         GroupAction::ChatBackgroundChanged => {
                             SerializableGroupAction::ChatBackgroundChanged
                         }
@@ -574,7 +617,11 @@ impl NdjsonExporter {
         }
     }
 
-    fn build_chat_context(&self, chat: &Chat, _handles: &HashMap<i32, Handle>) -> SerializableChatContext {
+    fn build_chat_context(
+        &self,
+        chat: &Chat,
+        _handles: &HashMap<i32, Handle>,
+    ) -> SerializableChatContext {
         // Get participants (simplified - just the chat identifier for now)
         let participants = vec![chat.chat_identifier.clone()];
 
@@ -582,7 +629,11 @@ impl NdjsonExporter {
             chat_id: Some(chat.rowid),
             chat_identifier: chat.chat_identifier.clone(),
             display_name: chat.display_name().map(String::from),
-            service_name: chat.service_name.as_deref().unwrap_or("Unknown").to_string(),
+            service_name: chat
+                .service_name
+                .as_deref()
+                .unwrap_or("Unknown")
+                .to_string(),
             participants,
         }
     }
@@ -771,6 +822,75 @@ impl NdjsonExporter {
             subject: msg.subject.clone(),
             components,
         })
+    }
+
+    /// Write participants file for a chat
+    fn write_participants_file(
+        &self,
+        chat_id: i32,
+        handles: &HashMap<i32, Handle>,
+        chatroom_participants: &HashMap<i32, BTreeSet<i32>>,
+        contact_resolver: &mut ContactResolver,
+        avatar_manager: &mut Option<AvatarManager>,
+        avatar_paths: &HashMap<String, PathBuf>,
+    ) -> Result<()> {
+        // Get participants for this chat from the chatroom_participants map
+        let participant_ids = match chatroom_participants.get(&chat_id) {
+            Some(ids) => ids,
+            None => return Ok(()), // No participants for this chat
+        };
+
+        // Collect all participants for this chat
+        let mut participants = Vec::new();
+
+        for &handle_id in participant_ids {
+            if let Some(handle) = handles.get(&handle_id) {
+                let identifier = handle.id.clone();
+                let contact_name = contact_resolver.resolve_name(&identifier, false);
+
+                // Look up avatar path and copy if available
+                let avatar_path = if let Some(source_path) = avatar_paths.get(&identifier) {
+                    if let Some(ref mut mgr) = avatar_manager {
+                        mgr.copy_avatar(source_path)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                participants.push(SerializableParticipant {
+                    handle_id,
+                    identifier,
+                    contact_name,
+                    avatar_path,
+                });
+            }
+        }
+
+        // Write participants to NDJSON file
+        let filename = if let Some(ref custom_name) = self.custom_name {
+            format!("chat_{}_{}_participants.ndjson", chat_id, custom_name)
+        } else {
+            format!("chat_{}_participants.ndjson", chat_id)
+        };
+        let filepath = self.output_dir.join(&filename);
+        let file = File::create(&filepath).with_context(|| {
+            format!("Failed to create participants file: {}", filepath.display())
+        })?;
+        let mut writer = BufWriter::new(file);
+
+        for participant in participants {
+            let json =
+                serde_json::to_string(&participant).context("Failed to serialize participant")?;
+            writeln!(writer, "{}", json).context("Failed to write participant to file")?;
+        }
+
+        writer
+            .flush()
+            .context("Failed to flush participants file")?;
+
+        Ok(())
     }
 }
 

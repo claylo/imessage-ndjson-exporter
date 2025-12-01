@@ -194,6 +194,53 @@ brew install ffmpeg imagemagick
 - MIME types in JSON output are updated to reflect converted formats
 - Progress messages are shown during video conversions
 
+### Include Participant Avatars
+
+Extract contact avatars from the macOS Contacts database and include them in the export:
+
+```bash
+./target/release/imessage-ndjson-exporter \
+  --output ./export \
+  --include-avatars
+```
+
+**What this does:**
+- Creates a `chat_XX_participants.ndjson` file for each conversation
+- Copies avatar images to `avatars/` directory in the output folder
+- Uses content-based hashing to deduplicate avatars across chats
+- Maps participant phone numbers/emails to contact avatars
+
+**Output structure:**
+```
+export/
+  chat_123.ndjson
+  chat_123_participants.ndjson
+  chat_456.ndjson
+  chat_456_participants.ndjson
+  avatars/
+    a3f2c8d9e4b1f7a2.jpg
+    b7c4d1e8f2a9c3d5.jpg
+```
+
+**Participants file format:**
+Each line is a JSON object with participant information:
+
+```json
+{
+  "handle_id": 7,
+  "identifier": "+15551234567",
+  "contact_name": "Jane Doe",
+  "avatar_path": "avatars/a3f2c8d9e4b1f7a2.jpg"
+}
+```
+
+If a participant has no avatar in the contacts database, `avatar_path` will be `null`.
+
+**Notes:**
+- Requires access to macOS Contacts database (`~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb`)
+- Avatar images are typically JPEG format
+- Use `--contacts-path` to specify custom contacts database location
+
 ### Quiet Mode
 
 Disable progress indicators:
@@ -475,7 +522,6 @@ Possible future additions (not currently implemented):
 - **Incremental exports** - Only export new messages
 - **File compression** - Automatic `.ndjson.gz` output for NDJSON files
 - **Date filtering** - Export specific date ranges
-- **Participant avatars** - Include contact photos in metadata
 
 ## License
 

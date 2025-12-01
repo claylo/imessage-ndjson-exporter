@@ -45,6 +45,7 @@ fn main() -> Result<()> {
         cli.embed_attachments,
         cli.max_embed_size,
         embed_compression,
+        cli.include_avatars,
     )?;
 
     exporter.export()?;

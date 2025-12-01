@@ -2,3 +2,4 @@ imessage-exporter/
 target/
 output*
 .DS_Store
+commit.txt

@@ -282,6 +282,83 @@ impl ContactsIndex {
 
         result
     }
+
+    /// Get avatar paths for all contacts in the index
+    ///
+    /// Returns a HashMap mapping contact identifiers (phone/email) to avatar file paths.
+    /// Only includes contacts that have avatars.
+    ///
+    /// - `path`: Optional path to contacts database. If None, scans default macOS locations.
+    /// - `sources_dir`: Base AddressBook/Sources directory containing Images folders
+    pub fn get_avatar_paths(
+        &self,
+        path: Option<&Path>,
+        _sources_dir: Option<&Path>,
+    ) -> Result<HashMap<String, PathBuf>, TableError> {
+        let mut avatar_map = HashMap::new();
+
+        if let Some(path) = path {
+            let conn = get_connection(path)?;
+            let db_dir = path.parent().unwrap_or(Path::new(""));
+            Self::query_avatars_from_db(&conn, db_dir, &mut avatar_map)?;
+        } else {
+            // Scan all macOS addressbook databases
+            for db_path in find_macos_addressbook_db_paths() {
+                if let Ok(conn) = Connection::open(&db_path) {
+                    let db_dir = db_path.parent().unwrap_or(Path::new(""));
+                    let _ = Self::query_avatars_from_db(&conn, db_dir, &mut avatar_map);
+                }
+            }
+        }
+
+        Ok(avatar_map)
+    }
+
+    /// Query avatar information from a single contacts database
+    fn query_avatars_from_db(
+        conn: &Connection,
+        db_dir: &Path,
+        avatar_map: &mut HashMap<String, PathBuf>,
+    ) -> Result<(), TableError> {
+        // Query contacts with avatars
+        // ZABCDRECORD has Z_PK (primary key)
+        // ZABCDIMAGES has ZOWNER (foreign key to ZABCDRECORD.Z_PK) and ZPATH (relative path to image)
+        let mut stmt = conn.prepare(
+            "SELECT r.Z_PK, r.ZFIRSTNAME, r.ZLASTNAME, p.ZFULLNUMBER, e.ZADDRESSNORMALIZED, i.ZPATH
+             FROM ZABCDRECORD AS r
+             LEFT JOIN ZABCDPHONENUMBER AS p ON r.Z_PK = p.ZOWNER
+             LEFT JOIN ZABCDEMAILADDRESS AS e ON r.Z_PK = e.ZOWNER
+             INNER JOIN ZABCDIMAGEDATA AS i ON r.Z_PK = i.ZOWNER
+             WHERE i.ZPATH IS NOT NULL",
+        )?;
+
+        let images_dir = db_dir.join("Images");
+
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let avatar_relative_path: Option<String> = row.get(5)?;
+
+            if let Some(rel_path) = avatar_relative_path {
+                let avatar_path = images_dir.join(&rel_path);
+
+                // Map emails
+                if let Some(email_raw) = row.get::<_, Option<String>>(4)? {
+                    for email in parse_email_list(&email_raw) {
+                        avatar_map.insert(email, avatar_path.clone());
+                    }
+                }
+
+                // Map phones
+                if let Some(phone_raw) = row.get::<_, Option<String>>(3)? {
+                    for key in phone_keys(&phone_raw) {
+                        avatar_map.insert(key, avatar_path.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Check if a table or view exists in the database

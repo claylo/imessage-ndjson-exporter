@@ -5,6 +5,7 @@
 /// metadata, reactions, edits, attachments, and special features.
 
 pub mod attachment_manager;
+pub mod avatar_manager;
 pub mod cli;
 pub mod contacts;
 pub mod converters;

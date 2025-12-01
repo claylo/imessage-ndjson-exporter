@@ -81,6 +81,13 @@ pub struct Cli {
     #[arg(long = "embed-compression", default_value = "auto")]
     pub embed_compression: String,
 
+    /// Include participant avatars from contacts database
+    ///
+    /// Creates chat_XX_participants.ndjson files with avatar information.
+    /// Avatar images are copied to avatars/ directory (deduplicated by content hash).
+    #[arg(long = "include-avatars")]
+    pub include_avatars: bool,
+
     /// Custom name for the database owner (overrides contact resolution)
     #[arg(long = "custom-name")]
     pub custom_name: Option<String>,
