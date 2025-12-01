@@ -559,6 +559,7 @@ Possible future additions (not currently implemented):
 - **Incremental exports** - Only export new messages
 - **File compression** - Automatic `.ndjson.gz` output for NDJSON files
 - **Date filtering** - Export specific date ranges
+- **Full test suite** - For all imessage-database message types
 
 ## License
 
