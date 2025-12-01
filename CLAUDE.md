@@ -128,9 +128,45 @@ parent-directory/
     imessage-database/
 ```
 
+### Attachment Handling Modes
+
+The exporter supports three mutually-exclusive modes for handling attachments:
+
+**1. Reference In-Place (Default)**
+
+When neither `--copy-attachments` nor `--embed-attachments` is specified, attachments are referenced by their original absolute paths without copying or embedding. The `original_path` field in the JSON contains the full path to the attachment file.
+
+- Fastest export (no file I/O for attachments)
+- Minimal disk space usage
+- Preserves original file structure
+- Ideal for local analysis and archival
+
+**2. Copy Mode (`--copy-attachments`)**
+
+Copies attachment files to the export directory in an organized structure: `attachments/chat_ID/hash.ext`. Files are deduplicated using SHA256 content hashing. The `copied_path` field contains the relative path from the output directory.
+
+- Portable exports (all files in one directory tree)
+- Supports format conversion (`--convert-attachments`)
+- Deduplicates identical files across chats
+- Organizes files by chat for easy navigation
+
+**3. Embed Mode (`--embed-attachments`)**
+
+Embeds attachment data directly in the JSON as base64-encoded strings. The `embedded_data` field contains the encoded data, along with `embedded_encoding` and `embedded_compression` metadata.
+
+- Fully self-contained exports (single NDJSON file per chat)
+- No external file dependencies
+- Significantly increases JSON file size
+- Supports compression (auto, gzip, zstd, none)
+- Size limit configurable via `--max-embed-size`
+
+**Implementation Notes:**
+
+The exporter checks flags in order: `embed_attachments` → `copy_attachments` → default (reference in-place). The `AttachmentManager` is only created when copying or embedding is enabled. In reference mode, `attachment.path()` is called to get the original path, which is included in the serialized output.
+
 ### Attachment Conversion
 
-The `--convert-attachments` flag enables format conversion using external tools:
+The `--convert-attachments` flag enables format conversion using external tools (requires `--copy-attachments`):
 
 **Implementation:** `src/converters/`
 - `models.rs` - Converter trait and tool detection

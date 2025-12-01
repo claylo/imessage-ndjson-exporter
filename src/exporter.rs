@@ -710,7 +710,10 @@ impl NdjsonExporter {
                         // Track converted MIME type (if conversion occurred)
                         let mut converted_mime_type: Option<String> = None;
 
-                        // Handle attachment based on mode (embed or copy)
+                        // Get original path for reference-in-place mode
+                        let original_path = att.path().and_then(|p| p.to_str()).map(String::from);
+
+                        // Handle attachment based on mode (embed, copy, or reference-in-place)
                         let (
                             copied_path,
                             copy_error,
@@ -739,7 +742,7 @@ impl NdjsonExporter {
                             } else {
                                 (None, None, None, None, None, None)
                             }
-                        } else {
+                        } else if self.copy_attachments {
                             // Copy mode
                             if let Some(ref mut mgr) = attachment_manager {
                                 match mgr.copy_attachment(&att, chat_id) {
@@ -753,6 +756,10 @@ impl NdjsonExporter {
                             } else {
                                 (None, None, None, None, None, None)
                             }
+                        } else {
+                            // Reference-in-place mode (default)
+                            // No copying or embedding, just reference the original path
+                            (None, None, None, None, None, None)
                         };
 
                         // Use converted MIME type if available, otherwise use original
@@ -777,6 +784,7 @@ impl NdjsonExporter {
                             },
                             is_sticker: att.is_sticker,
                             sticker_metadata: None,
+                            original_path,
                             copied_path,
                             copy_error,
                             embedded_data,
@@ -799,6 +807,7 @@ impl NdjsonExporter {
                             dimensions: None,
                             is_sticker: false,
                             sticker_metadata: None,
+                            original_path: None,
                             copied_path: None,
                             copy_error: Some("Attachment not found in database".to_string()),
                             embedded_data: None,

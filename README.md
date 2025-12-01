@@ -107,6 +107,38 @@ If your contacts database is in a non-standard location:
 
 ### Attachment Handling
 
+The exporter supports three modes for handling attachments:
+
+1. **Reference in-place** (default) - Include original file paths in JSON without copying
+2. **Copy** (`--copy-attachments`) - Copy files to export directory with optional format conversion
+3. **Embed** (`--embed-attachments`) - Embed files as base64 in JSON
+
+#### Reference Attachments In-Place (Default)
+
+By default, attachments are **not copied**. The JSON output includes the original absolute path to each attachment file in the `original_path` field:
+
+```bash
+./target/release/imessage-ndjson-exporter --output ./export
+```
+
+**Benefits:**
+- Fastest export (no file copying)
+- Minimal disk space usage
+- Preserves original files in their original location
+
+**JSON output:**
+```json
+{
+  "type": "attachment",
+  "filename": "/Users/you/Library/Messages/Attachments/ab/01/xyz/IMG_1234.HEIC",
+  "original_path": "/Users/you/Library/Messages/Attachments/ab/01/xyz/IMG_1234.HEIC",
+  "mime_type": "image/heic",
+  "size_bytes": 2457600
+}
+```
+
+**Note:** This mode is ideal for local analysis where you want to preserve the original attachment structure.
+
 #### Copy Attachments to Directory
 
 Copy attachment files to the output directory (organized by chat):

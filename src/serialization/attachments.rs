@@ -25,6 +25,9 @@ pub struct SerializableAttachment {
     /// Sticker metadata (if this is a sticker)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sticker_metadata: Option<StickerMetadata>,
+    /// Original absolute path to attachment file (for reference-in-place mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_path: Option<String>,
     /// Relative path to copied attachment (e.g., "attachments/chat_123/abc123.jpg")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub copied_path: Option<String>,
