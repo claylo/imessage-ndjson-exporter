@@ -142,7 +142,7 @@ impl NdjsonExporter {
 
         // Find matching handle_ids
         let mut included_handles: HashSet<i32> = HashSet::new();
-        for (_deduped_id, name) in &participants_with_names {
+        for name in participants_with_names.values() {
             for filter_term in &filter_terms {
                 if name.contains(filter_term) {
                     included_handles.extend(&name.handle_ids);
@@ -162,7 +162,7 @@ impl NdjsonExporter {
             let handle_id: i32 = row.get(1)?;
             chatroom_participants
                 .entry(chat_id)
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(handle_id);
         }
 

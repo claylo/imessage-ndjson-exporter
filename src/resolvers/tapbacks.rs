@@ -21,7 +21,7 @@ impl TapbackResolver {
     pub fn add_tapback(&mut self, associated_guid: String, tapback_message: Message) {
         self.tapback_map
             .entry(associated_guid)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(tapback_message);
     }
 

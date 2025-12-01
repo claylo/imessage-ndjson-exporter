@@ -43,8 +43,16 @@ imessage-database = "3.2.1"
 # Database (same version as imessage-database)
 rusqlite = { version = "=0.37.0", features = ["blob", "bundled"] }
 
+[features]
+test-utils = []
+
 [dev-dependencies]
 tempfile = "3.8"
+assert-json-diff = "2.0"   # JSON comparison for test assertions
+predicates = "3.0"         # Advanced assertions
+assert_fs = "1.1"          # Filesystem assertions
+assert_cmd = "2.0"         # CLI testing
+plist = "1.5"              # Plist parsing for test fixtures
 
 [[bin]]
 name = "imessage-ndjson-exporter"

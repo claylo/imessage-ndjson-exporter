@@ -13,4 +13,8 @@ pub mod exporter;
 pub mod resolvers;
 pub mod serialization;
 
+// Test utilities (only available during testing)
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
 pub use exporter::NdjsonExporter;
