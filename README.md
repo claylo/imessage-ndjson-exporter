@@ -160,6 +160,40 @@ Example with custom settings:
   --embed-compression zstd
 ```
 
+#### Convert Attachments to Compatible Formats
+
+Convert Apple-specific attachment formats to widely-compatible formats:
+
+```bash
+./target/release/imessage-ndjson-exporter \
+  --output ./export \
+  --copy-attachments \
+  --convert-attachments
+```
+
+**Conversions:**
+- **HEIC → JPEG** (images) using `sips` (macOS) or `imagemagick`
+- **MOV → MP4** (videos) using `ffmpeg` with H.264 codec
+- **CAF → M4A** (audio) using `afconvert` (macOS) or `ffmpeg`
+
+**Required Tools:**
+- Images: `sips` (macOS builtin) or `imagemagick`
+- Videos: `ffmpeg`
+- Audio: `afconvert` (macOS builtin) or `ffmpeg`
+
+**Installation (macOS):**
+```bash
+brew install ffmpeg imagemagick
+```
+
+**Notes:**
+- Requires `--copy-attachments` flag (mutually exclusive with `--embed-attachments`)
+- All required converters must be installed or the export will fail with a clear error message
+- Video conversion uses software encoding (H.264) and may be slow for large files
+- Remuxing (container change only) is attempted first for speed when possible
+- MIME types in JSON output are updated to reflect converted formats
+- Progress messages are shown during video conversions
+
 ### Quiet Mode
 
 Disable progress indicators:
@@ -436,7 +470,6 @@ The tool uses imessage-database as a library dependency, ensuring compatibility 
 
 Possible future additions (not currently implemented):
 
-- **Attachment format conversion** - Convert HEIC to JPEG, MOV to MP4, etc. (currently stubbed)
 - **NDJSON → HTML renderer** - Convert NDJSON back to HTML
 - **NDJSON → TXT renderer** - Convert NDJSON to plain text
 - **Incremental exports** - Only export new messages

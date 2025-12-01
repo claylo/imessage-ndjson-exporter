@@ -11,6 +11,8 @@ use imessage_database::tables::attachment::Attachment;
 use imessage_database::util::platform::Platform;
 use sha2::{Digest, Sha256};
 
+use crate::converters::{AudioConverter, Converter, ImageConverter, VideoConverter};
+
 /// Compression mode for embedded attachments
 #[derive(Debug, Clone, Copy)]
 pub enum CompressionMode {
@@ -81,7 +83,6 @@ pub struct AttachmentManager {
     attachments_subdir: String,
 
     /// Whether to convert attachments to compatible formats
-    #[allow(dead_code)]
     convert: bool,
 
     /// Cache mapping: hash -> copied path (for deduplication)
@@ -92,6 +93,15 @@ pub struct AttachmentManager {
 
     /// Database path (for resolving attachment paths)
     db_path: PathBuf,
+
+    /// Image converter (if available)
+    image_converter: Option<ImageConverter>,
+
+    /// Video converter (if available)
+    video_converter: Option<VideoConverter>,
+
+    /// Audio converter (if available)
+    audio_converter: Option<AudioConverter>,
 }
 
 impl AttachmentManager {
@@ -103,6 +113,17 @@ impl AttachmentManager {
         platform: Platform,
         db_path: PathBuf,
     ) -> Self {
+        // Detect converters if conversion is enabled
+        let (image_converter, video_converter, audio_converter) = if convert {
+            (
+                ImageConverter::determine(),
+                VideoConverter::determine(),
+                AudioConverter::determine(),
+            )
+        } else {
+            (None, None, None)
+        };
+
         Self {
             output_dir: output_dir.to_path_buf(),
             attachments_subdir,
@@ -110,23 +131,27 @@ impl AttachmentManager {
             hash_cache: HashMap::new(),
             platform,
             db_path,
+            image_converter,
+            video_converter,
+            audio_converter,
         }
     }
 
-    /// Copy an attachment, returning relative path or error message
+    /// Copy an attachment, returning relative path and optionally new MIME type
     ///
     /// This method:
     /// 1. Resolves the attachment path using platform-specific logic
     /// 2. Checks if the file exists
     /// 3. Computes SHA256 hash of the file contents
     /// 4. Checks the deduplication cache
-    /// 5. Copies the file if not already cached
-    /// 6. Returns relative path from output_dir
+    /// 5. Converts the file if conversion is enabled and applicable
+    /// 6. Copies the file if not already cached
+    /// 7. Returns (relative_path, new_mime_type) - MIME type is Some if conversion occurred
     pub fn copy_attachment(
         &mut self,
         attachment: &Attachment,
         chat_id: i32,
-    ) -> Result<String, String> {
+    ) -> Result<(String, Option<String>), String> {
         // 1. Resolve attachment path using platform-specific logic
         let source_path = match attachment.resolved_attachment_path(
             &self.platform,
@@ -154,8 +179,8 @@ impl AttachmentManager {
 
         // 4. Check deduplication cache
         if let Some(cached_path) = self.hash_cache.get(&hash) {
-            // File already copied, return relative path
-            return Ok(self.make_relative_path(cached_path));
+            // File already copied, return relative path (no MIME change for cached files)
+            return Ok((self.make_relative_path(cached_path), None));
         }
 
         // 5. Determine file extension
@@ -168,24 +193,73 @@ impl AttachmentManager {
             .output_dir
             .join(&self.attachments_subdir)
             .join(format!("chat_{}", chat_id));
-        let dest_path = dest_dir.join(format!("{}.{}", hash_prefix, extension));
+        let mut dest_path = dest_dir.join(format!("{}.{}", hash_prefix, extension));
 
         // 7. Create directory if needed
         if let Err(e) = fs::create_dir_all(&dest_dir) {
             return Err(format!("Failed to create directory: {}", e));
         }
 
-        // 8. Copy file
-        // Note: conversion is stubbed for now, always copies raw
-        if let Err(e) = fs::copy(&source_path, &dest_path) {
-            return Err(format!("Failed to copy file: {}", e));
+        // 8. Convert or copy file
+        use crate::converters::{audio, image, video};
+
+        let mime_type = attachment.mime_type.as_deref().unwrap_or("");
+        let mut extension_changed = false;
+
+        // Try conversion if enabled
+        if self.convert {
+            if mime_type.starts_with("image/") {
+                extension_changed = image::convert_if_needed(
+                    &source_path,
+                    &mut dest_path,
+                    &self.image_converter,
+                    mime_type,
+                );
+            } else if mime_type.starts_with("video/") {
+                extension_changed = video::convert_if_needed(
+                    &source_path,
+                    &mut dest_path,
+                    &self.video_converter,
+                    mime_type,
+                );
+            } else if mime_type.starts_with("audio/") {
+                extension_changed = audio::convert_if_needed(
+                    &source_path,
+                    &mut dest_path,
+                    &self.audio_converter,
+                    mime_type,
+                );
+            }
         }
 
-        // 9. Update cache
+        // Fallback to raw copy if conversion didn't happen
+        if !extension_changed {
+            if let Err(e) = fs::copy(&source_path, &dest_path) {
+                return Err(format!("Failed to copy attachment: {}", e));
+            }
+        }
+
+        // 9. Determine new MIME type if extension changed
+        let new_mime = if extension_changed {
+            let ext = dest_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            match ext {
+                "jpeg" => Some("image/jpeg".to_string()),
+                "mp4" => Some("video/mp4".to_string()),
+                "m4a" => Some("audio/mp4".to_string()), // M4A is MP4 container with AAC
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // 10. Update cache
         let relative_path = self.make_relative_path(&dest_path);
         self.hash_cache.insert(hash, dest_path);
 
-        Ok(relative_path)
+        Ok((relative_path, new_mime))
     }
 
     /// Embed an attachment as base64-encoded data

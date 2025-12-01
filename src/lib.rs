@@ -7,6 +7,7 @@
 pub mod attachment_manager;
 pub mod cli;
 pub mod contacts;
+pub mod converters;
 pub mod exporter;
 pub mod resolvers;
 pub mod serialization;

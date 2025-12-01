@@ -56,7 +56,7 @@ cargo fmt -- --check
 
 ### Module Structure
 
-The codebase is organized into four main modules:
+The codebase is organized into five main modules:
 
 1. **`exporter`** (`src/exporter.rs`) - Core export logic
    - `NdjsonExporter` orchestrates the entire export process
@@ -75,7 +75,14 @@ The codebase is organized into four main modules:
    - `TapbackResolver` - Maintains cache of reactions (tapbacks) by message GUID
    - `ReplyResolver` - Placeholder for thread reply resolution (not yet implemented)
 
-4. **`cli`** (`src/cli.rs`) - Command-line interface
+4. **`converters`** (`src/converters/`) - Attachment format conversion
+   - `models` - Converter trait and tool detection
+   - `image` - HEIC → JPEG conversion (sips or imagemagick)
+   - `video` - MOV → MP4 conversion (ffmpeg, software-only)
+   - `audio` - CAF → M4A conversion (afconvert or ffmpeg)
+   - `common` - Shared utilities (run_command, ensure_paths)
+
+5. **`cli`** (`src/cli.rs`) - Command-line interface
    - Uses clap 4.x with derive macros
    - Defines all CLI arguments and options
 
@@ -121,6 +128,33 @@ parent-directory/
     imessage-database/
 ```
 
+### Attachment Conversion
+
+The `--convert-attachments` flag enables format conversion using external tools:
+
+**Implementation:** `src/converters/`
+- `models.rs` - Converter trait and tool detection
+- `image.rs` - HEIC → JPEG conversion (sips or imagemagick)
+- `video.rs` - MOV → MP4 conversion (ffmpeg, software-only)
+- `audio.rs` - CAF → M4A conversion (afconvert or ffmpeg)
+
+**Tool Detection:** Runs at startup using `which` (Unix) or `where` (Windows)
+
+**Error Handling:** Fails fast if `--convert-attachments` is specified but required tools are missing. Provides installation instructions.
+
+**Conversion Strategy:**
+- **Images (HEIC → JPEG):** Direct conversion using sips or imagemagick
+- **Video (MOV → MP4):** Two-stage process:
+  1. Try remuxing (container change only, fast, no re-encoding)
+  2. Fall back to software re-encoding with libx264 if remuxing fails
+- **Audio (CAF → M4A):** Convert to MP4 container with AAC audio
+
+**Extension Tracking:** Conversion functions update the destination path's extension. The relative path returned to the serializer automatically reflects the new extension.
+
+**MIME Type Updates:** When conversion occurs, the MIME type in the JSON output is updated to reflect the converted format (e.g., `image/heic` → `image/jpeg`).
+
+**Progress Indication:** Video conversions show progress messages to prevent "frozen" appearance during slow re-encoding operations.
+
 ### Incomplete Features (TODOs)
 
 Several features are stubbed but not fully implemented:
@@ -128,8 +162,6 @@ Several features are stubbed but not fully implemented:
 - Tapback resolution (relationships.rs:278)
 - Edit history tracking (relationships.rs:279)
 - Expressive effects (message.rs:288)
-- Group actions (message.rs:289)
-- Attachment metadata serialization (exporter.rs:377-379)
 - App message serialization (exporter.rs:380-382)
 
 When implementing these, refer to the corresponding types in imessage-database and add serialization modules in `src/serialization/`.

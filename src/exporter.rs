@@ -180,6 +180,31 @@ impl NdjsonExporter {
         let db = get_connection(&self.database_path)
             .map_err(|e| anyhow::anyhow!("Failed to connect to iMessage database: {:?}", e))?;
 
+        // Validate converters if conversion is requested (strict mode)
+        if self.convert_attachments {
+            use crate::converters::{AudioConverter, Converter, ImageConverter, VideoConverter};
+
+            let mut missing_tools = Vec::new();
+
+            if ImageConverter::determine().is_none() {
+                missing_tools.push("Image converter (install: brew install imagemagick)");
+            }
+            if VideoConverter::determine().is_none() {
+                missing_tools.push("Video converter (install: brew install ffmpeg)");
+            }
+            if AudioConverter::determine().is_none() {
+                missing_tools.push("Audio converter (ffmpeg or afconvert required)");
+            }
+
+            if !missing_tools.is_empty() {
+                anyhow::bail!(
+                    "Attachment conversion requested but required tools are not installed:\n\n  {}\n\n\
+                     Install all required tools or remove --convert-attachments flag.",
+                    missing_tools.join("\n  ")
+                );
+            }
+        }
+
         // Get timezone offset (not critical if it fails, use 0)
         let offset = 0i64;
 
@@ -631,6 +656,9 @@ impl NdjsonExporter {
                     });
 
                     if let Some(att) = attachment {
+                        // Track converted MIME type (if conversion occurred)
+                        let mut converted_mime_type: Option<String> = None;
+
                         // Handle attachment based on mode (embed or copy)
                         let (
                             copied_path,
@@ -664,7 +692,11 @@ impl NdjsonExporter {
                             // Copy mode
                             if let Some(ref mut mgr) = attachment_manager {
                                 match mgr.copy_attachment(&att, chat_id) {
-                                    Ok(path) => (Some(path), None, None, None, None, None),
+                                    Ok((path, new_mime)) => {
+                                        // Store converted MIME type if conversion occurred
+                                        converted_mime_type = new_mime;
+                                        (Some(path), None, None, None, None, None)
+                                    }
                                     Err(err) => (None, Some(err), None, None, None, None),
                                 }
                             } else {
@@ -672,12 +704,15 @@ impl NdjsonExporter {
                             }
                         };
 
+                        // Use converted MIME type if available, otherwise use original
+                        let final_mime_type = converted_mime_type.or_else(|| att.mime_type.clone());
+
                         // Build SerializableAttachment
                         let serializable = SerializableAttachment {
                             guid: meta.guid.clone(),
                             filename: att.filename.clone(),
                             transfer_name: att.transfer_name.clone(),
-                            mime_type: att.mime_type.clone(),
+                            mime_type: final_mime_type,
                             uti: att.uti.clone(),
                             size_bytes: att.total_bytes,
                             transcription: meta.transcription.clone(),
