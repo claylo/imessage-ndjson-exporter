@@ -134,7 +134,8 @@ The `--convert-attachments` flag enables format conversion using external tools:
 
 **Implementation:** `src/converters/`
 - `models.rs` - Converter trait and tool detection
-- `image.rs` - HEIC → JPEG conversion (sips or imagemagick)
+- `image.rs` - HEIC → JPEG conversion for photos (sips or imagemagick)
+- `sticker.rs` - Sticker-specific conversions (HEIC → PNG, HEICS → GIF)
 - `video.rs` - MOV → MP4 conversion (ffmpeg, software-only)
 - `audio.rs` - CAF → M4A conversion (afconvert or ffmpeg)
 
@@ -143,7 +144,15 @@ The `--convert-attachments` flag enables format conversion using external tools:
 **Error Handling:** Fails fast if `--convert-attachments` is specified but required tools are missing. Provides installation instructions.
 
 **Conversion Strategy:**
-- **Images (HEIC → JPEG):** Direct conversion using sips or imagemagick
+- **Photos (HEIC → JPEG):** Direct conversion using sips or imagemagick
+- **Stickers (HEIC → PNG):** Detected via `attachment.is_sticker` field, converted to PNG to preserve transparency. Sticker HEIC files contain 5 image resolutions; only the highest (320x320) is extracted.
+- **Animated Stickers (HEICS → GIF):** Complex multi-stage process using ffmpeg:
+  1. Extract video frames from stream 2 (animation data)
+  2. Extract alpha masks from stream 3 (transparency data)
+  3. Merge frames with alpha masks to create transparent PNGs
+  4. Generate transparency-aware color palette
+  5. Create final animated GIF with proper transparency
+  6. Clean up temporary files
 - **Video (MOV → MP4):** Two-stage process:
   1. Try remuxing (container change only, fast, no re-encoding)
   2. Fall back to software re-encoding with libx264 if remuxing fails
@@ -151,7 +160,7 @@ The `--convert-attachments` flag enables format conversion using external tools:
 
 **Extension Tracking:** Conversion functions update the destination path's extension. The relative path returned to the serializer automatically reflects the new extension.
 
-**MIME Type Updates:** When conversion occurs, the MIME type in the JSON output is updated to reflect the converted format (e.g., `image/heic` → `image/jpeg`).
+**MIME Type Updates:** When conversion occurs, the MIME type in the JSON output is updated to reflect the converted format (e.g., `image/heic` → `image/jpeg` for photos, `image/heic` → `image/png` for stickers, `image/heics` → `image/gif` for animated stickers).
 
 **Progress Indication:** Video conversions show progress messages to prevent "frozen" appearance during slow re-encoding operations.
 

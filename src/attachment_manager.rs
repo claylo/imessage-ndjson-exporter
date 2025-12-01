@@ -201,14 +201,23 @@ impl AttachmentManager {
         }
 
         // 8. Convert or copy file
-        use crate::converters::{audio, image, video};
+        use crate::converters::{audio, image, sticker, video};
 
         let mime_type = attachment.mime_type.as_deref().unwrap_or("");
         let mut extension_changed = false;
 
         // Try conversion if enabled
         if self.convert {
-            if mime_type.starts_with("image/") {
+            // Stickers get special handling (HEIC→PNG, HEICS→GIF)
+            if attachment.is_sticker && mime_type.starts_with("image/") {
+                extension_changed = sticker::convert_if_needed(
+                    &source_path,
+                    &mut dest_path,
+                    &self.image_converter,
+                    &self.video_converter,
+                    mime_type,
+                );
+            } else if mime_type.starts_with("image/") {
                 extension_changed = image::convert_if_needed(
                     &source_path,
                     &mut dest_path,
@@ -247,6 +256,8 @@ impl AttachmentManager {
                 .unwrap_or("");
             match ext {
                 "jpeg" => Some("image/jpeg".to_string()),
+                "png" => Some("image/png".to_string()),
+                "gif" => Some("image/gif".to_string()),
                 "mp4" => Some("video/mp4".to_string()),
                 "m4a" => Some("audio/mp4".to_string()), // M4A is MP4 container with AAC
                 _ => None,

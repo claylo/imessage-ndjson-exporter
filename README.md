@@ -172,7 +172,9 @@ Convert Apple-specific attachment formats to widely-compatible formats:
 ```
 
 **Conversions:**
-- **HEIC → JPEG** (images) using `sips` (macOS) or `imagemagick`
+- **HEIC → JPEG** (photos) using `sips` (macOS) or `imagemagick`
+- **Sticker HEIC → PNG** (static stickers with transparency) using `sips` or `imagemagick`
+- **Sticker HEICS → GIF** (animated stickers) using `ffmpeg` with transparency support
 - **MOV → MP4** (videos) using `ffmpeg` with H.264 codec
 - **CAF → M4A** (audio) using `afconvert` (macOS) or `ffmpeg`
 
@@ -189,6 +191,9 @@ brew install ffmpeg imagemagick
 **Notes:**
 - Requires `--copy-attachments` flag (mutually exclusive with `--embed-attachments`)
 - All required converters must be installed or the export will fail with a clear error message
+- Stickers are automatically detected and converted appropriately (PNG for static, GIF for animated)
+- Sticker HEIC files contain 5 resolutions; only the highest (320x320) is extracted
+- Animated sticker conversion extracts video frames, applies alpha masks, and creates transparent GIFs
 - Video conversion uses software encoding (H.264) and may be slow for large files
 - Remuxing (container change only) is attempted first for speed when possible
 - MIME types in JSON output are updated to reflect converted formats
