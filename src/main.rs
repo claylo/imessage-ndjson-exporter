@@ -46,6 +46,8 @@ fn main() -> Result<()> {
         cli.max_embed_size,
         embed_compression,
         cli.include_avatars,
+        cli.start_date.clone(),
+        cli.end_date.clone(),
     )?;
 
     exporter.export()?;

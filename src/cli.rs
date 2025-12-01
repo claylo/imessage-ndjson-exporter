@@ -17,12 +17,12 @@ pub struct Cli {
     #[arg(short = 'o', long = "output", required = true)]
     pub output_dir: PathBuf,
 
-    /// Start date filter (YYYY-MM-DD format)
-    #[arg(long = "start-date")]
+    /// Only messages sent on or after this date will be included (YYYY-MM-DD)
+    #[arg(short = 's', long = "start-date", value_name = "YYYY-MM-DD")]
     pub start_date: Option<String>,
 
-    /// End date filter (YYYY-MM-DD format)
-    #[arg(long = "end-date")]
+    /// Only messages sent before this date will be included (YYYY-MM-DD)
+    #[arg(short = 'e', long = "end-date", value_name = "YYYY-MM-DD")]
     pub end_date: Option<String>,
 
     /// Filter by specific chat IDs (comma-separated)
@@ -120,8 +120,42 @@ impl Cli {
         })
     }
 
+    /// Validate date filter arguments
+    fn validate_dates(&self) -> Result<(), String> {
+        use chrono::NaiveDate;
+
+        // Validate start-date format
+        if let Some(ref start_date) = self.start_date {
+            NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
+                .map_err(|_| format!("Invalid start-date format. Expected YYYY-MM-DD, got: {}", start_date))?;
+        }
+
+        // Validate end-date format
+        if let Some(ref end_date) = self.end_date {
+            NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
+                .map_err(|_| format!("Invalid end-date format. Expected YYYY-MM-DD, got: {}", end_date))?;
+        }
+
+        // Ensure start_date <= end_date if both are provided
+        if let (Some(ref start_date), Some(ref end_date)) = (&self.start_date, &self.end_date) {
+            let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
+                .map_err(|_| "Failed to parse start-date".to_string())?;
+            let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
+                .map_err(|_| "Failed to parse end-date".to_string())?;
+
+            if start > end {
+                return Err("start-date must be before or equal to end-date".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate CLI arguments
     pub fn validate(&self) -> Result<(), String> {
+        // Validate date filters
+        self.validate_dates()?;
+
         // --convert-attachments requires --copy-attachments
         if self.convert_attachments && !self.copy_attachments {
             return Err("--convert-attachments requires --copy-attachments".to_string());

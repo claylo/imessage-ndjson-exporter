@@ -560,6 +560,7 @@ Possible future additions (not currently implemented):
 - **File compression** - Automatic `.ndjson.gz` output for NDJSON files
 - **Date filtering** - Export specific date ranges
 - **Full test suite** - For all imessage-database message types
+- **Caller ID** - use database's own caller ID in exports
 
 ## License
 

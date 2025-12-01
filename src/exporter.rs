@@ -52,6 +52,8 @@ pub struct NdjsonExporter {
     max_embed_size: usize,
     embed_compression: CompressionMode,
     include_avatars: bool,
+    start_timestamp: Option<i64>,  // Cocoa epoch nanoseconds (inclusive)
+    end_timestamp: Option<i64>,    // Cocoa epoch nanoseconds (exclusive)
 }
 
 impl NdjsonExporter {
@@ -69,7 +71,25 @@ impl NdjsonExporter {
         max_embed_size: usize,
         embed_compression: CompressionMode,
         include_avatars: bool,
+        start_date: Option<String>,
+        end_date: Option<String>,
     ) -> Result<Self> {
+        use chrono::NaiveDate;
+
+        // Parse start date to Cocoa epoch nanoseconds (inclusive)
+        let start_timestamp = start_date
+            .map(|s| parse_date_to_cocoa_nanos(&s))
+            .transpose()?;
+
+        // Parse end date to Cocoa epoch nanoseconds (exclusive - add 1 day)
+        let end_timestamp = end_date
+            .map(|s| {
+                let date = NaiveDate::parse_from_str(&s, "%Y-%m-%d")?;
+                let next_day = date + chrono::Duration::days(1);
+                parse_date_to_cocoa_nanos(&next_day.format("%Y-%m-%d").to_string())
+            })
+            .transpose()?;
+
         Ok(Self {
             database_path: database_path.to_path_buf(),
             output_dir: output_dir.to_path_buf(),
@@ -84,6 +104,8 @@ impl NdjsonExporter {
             max_embed_size,
             embed_compression,
             include_avatars,
+            start_timestamp,
+            end_timestamp,
         })
     }
 
@@ -326,8 +348,8 @@ impl NdjsonExporter {
                 offset,
             )?;
 
-            // Write participants file if avatars are enabled
-            if self.include_avatars {
+            // Write participants file if avatars are enabled and messages were exported
+            if self.include_avatars && message_count > 0 {
                 self.write_participants_file(
                     *chat_id,
                     &handles,
@@ -435,6 +457,18 @@ impl NdjsonExporter {
                     return Ok::<(), anyhow::Error>(());
                 }
 
+                // Apply date filters
+                if let Some(start) = self.start_timestamp {
+                    if msg.date < start {
+                        return Ok(()); // Skip message before start date
+                    }
+                }
+                if let Some(end) = self.end_timestamp {
+                    if msg.date >= end {
+                        return Ok(()); // Skip message at or after end date (exclusive)
+                    }
+                }
+
                 // Generate message text and components
                 if let Err(e) = msg.generate_text(db) {
                     eprintln!(
@@ -465,6 +499,15 @@ impl NdjsonExporter {
             Ok::<(), anyhow::Error>(())
         })
         .map_err(|e| anyhow::anyhow!("Failed to stream messages: {:?}", e))?;
+
+        // If no messages were exported (due to date filtering or otherwise), skip this chat
+        if message_count == 0 {
+            // Drop the writer to close the file
+            drop(writer);
+            // Delete the empty file
+            std::fs::remove_file(&output_path)?;
+            return Ok(0);
+        }
 
         writer.flush()?;
 
@@ -917,4 +960,25 @@ fn format_timestamp(timestamp: i64, _offset: i64) -> String {
         .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
 
     datetime.format("%Y-%m-%dT%H:%M:%S%z").to_string()
+}
+
+fn parse_date_to_cocoa_nanos(date_str: &str) -> anyhow::Result<i64> {
+    use chrono::NaiveDate;
+
+    // Parse YYYY-MM-DD string to NaiveDate
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .context(format!("Invalid date format '{}'. Expected YYYY-MM-DD", date_str))?;
+
+    // Convert to midnight UTC
+    let datetime = date.and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create datetime from date"))?;
+
+    // Get Unix timestamp in seconds
+    let unix_timestamp = datetime.and_utc().timestamp();
+
+    // Convert to Cocoa epoch (subtract offset) and then to nanoseconds
+    const COCOA_EPOCH_OFFSET: i64 = 978307200;
+    let cocoa_nanos = (unix_timestamp - COCOA_EPOCH_OFFSET) * 1_000_000_000;
+
+    Ok(cocoa_nanos)
 }
