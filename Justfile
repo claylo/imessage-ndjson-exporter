@@ -7,17 +7,17 @@ default:
   @just --list
 
 build:
-  cargo build --release
+  cargo build --workspace --release
 
 fmt:
   cargo fmt --all -- --config-path .config/rustfmt.toml
 
 clippy:
-  cargo +{{toolchain}} clippy --all-targets --all-features --message-format=short -- -D warnings
+  cargo +{{toolchain}} clippy --workspace --all-targets --all-features --message-format=short -- -D warnings
 
 fix:
   echo "Using toolchain {{toolchain}}"
-  cargo +{{toolchain}} clippy --fix --allow-dirty --allow-staged -- -W clippy::all
+  cargo +{{toolchain}} clippy --workspace --fix --allow-dirty --allow-staged -- -W clippy::all
 
 # Check dependencies for security advisories and license compliance.
 deny:
@@ -34,7 +34,7 @@ test-ci:
 # this flag, doc blocks inside `#[cfg(feature = "…")]` modules are skipped
 # entirely and can rot unnoticed.
 doc-test:
-  cargo test --doc --all-features
+  cargo test --workspace --doc --all-features
 
 cov:
   @cargo llvm-cov clean --workspace

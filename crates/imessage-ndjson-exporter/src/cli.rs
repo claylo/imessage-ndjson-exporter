@@ -103,24 +103,6 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Parse chat IDs from comma-separated string
-    pub fn parse_chat_ids(&self) -> Option<Vec<i64>> {
-        self.chat_ids.as_ref().and_then(|ids| {
-            ids.split(',')
-                .map(|id| id.trim().parse::<i64>().ok())
-                .collect::<Option<Vec<i64>>>()
-        })
-    }
-
-    /// Parse handle IDs from comma-separated string
-    pub fn parse_handle_ids(&self) -> Option<Vec<i64>> {
-        self.handle_ids.as_ref().and_then(|ids| {
-            ids.split(',')
-                .map(|id| id.trim().parse::<i64>().ok())
-                .collect::<Option<Vec<i64>>>()
-        })
-    }
-
     /// Validate date filter arguments
     fn validate_dates(&self) -> Result<(), String> {
         use chrono::NaiveDate;
