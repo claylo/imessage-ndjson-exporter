@@ -1,25 +1,6 @@
 [workspace]
-members = [".", "crates/imessage-ndjson-core"]
+members = ["crates/imessage-ndjson-core", "crates/imessage-ndjson-exporter"]
 resolver = "2"
-
-[package]
-name = "imessage-ndjson-exporter"
-version = "0.1.0"
-edition = "2021"
-authors = ["Clay"]
-description = "Export iMessage data to NDJSON format"
-license = "MIT"
-
-[dependencies]
-imessage-ndjson-core = { path = "crates/imessage-ndjson-core" }
-clap = { version = "4.4", features = ["derive", "cargo"] }
-librebar = { version = "0.1", features = ["cli", "logging", "crash"] }
-anyhow = "1.0"
-chrono = "0.4"
-
-[[bin]]
-name = "imessage-ndjson-exporter"
-path = "src/main.rs"
 
 [profile.release]
 lto = true
