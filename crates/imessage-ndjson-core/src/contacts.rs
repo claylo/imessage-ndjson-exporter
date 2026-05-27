@@ -4,9 +4,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use imessage_database::{
-    error::table::TableError, tables::table::get_connection, util::dirs::home,
-};
 use rusqlite::{Connection, Result};
 
 pub const DEFAULT_PATH_IOS: &str = "31/31bb7ba8914766d4ba40d6dfb6113c8b614be442";
@@ -24,7 +21,7 @@ pub struct Name {
     /// Combined handle details from iMessage's database
     pub details: String,
     /// Set of original handle IDs that map to this name
-    pub handle_ids: HashSet<i32>,
+    pub handle_ids: HashSet<i64>,
 }
 
 impl Name {
@@ -127,9 +124,9 @@ impl ContactsIndex {
     ///   `~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb`
     ///
     /// Supports building from both macOS (`AddressBook-v22.abcddb`) and iOS (`AddressBook.sqlitedb`) databases.
-    pub fn build(path: Option<&Path>) -> Result<Self, TableError> {
+    pub fn build(path: Option<&Path>) -> anyhow::Result<Self> {
         if let Some(path) = path {
-            let conn = get_connection(path)?;
+            let conn = open_readonly_connection(path)?;
             if table_exists(&conn, "ABPersonFullTextSearch_content") {
                 return Ok(Self::build_from_ios(&conn)?);
             }
@@ -192,8 +189,6 @@ impl ContactsIndex {
     // MARK: iOS
     /// Build contacts index from iOS backup database
     fn build_from_ios(conn: &Connection) -> Result<Self> {
-        // iOS backup contacts: ABPersonFullTextSearch_content with columns:
-        // c0First (TEXT), c1Last (TEXT), c16Phone (TEXT: space-separated variants), c17Email (TEXT: space-separated)
         let mut index = HashMap::new();
 
         let mut stmt = conn.prepare(
@@ -253,10 +248,10 @@ impl ContactsIndex {
     /// - Returns: map of deduplicated handle ID to Name
     pub fn build_participants_map(
         &self,
-        participants: &HashMap<i32, String>,
-        deduped_handles: &HashMap<i32, i32>,
-    ) -> HashMap<i32, Name> {
-        let mut result: HashMap<i32, Name> = HashMap::new();
+        participants: &HashMap<i64, String>,
+        deduped_handles: &HashMap<i64, i64>,
+    ) -> HashMap<i64, Name> {
+        let mut result: HashMap<i64, Name> = HashMap::new();
 
         for (&handle_id, details) in participants {
             let Some(&deduped_id) = deduped_handles.get(&handle_id) else {
@@ -287,18 +282,15 @@ impl ContactsIndex {
     ///
     /// Returns a HashMap mapping contact identifiers (phone/email) to avatar file paths.
     /// Only includes contacts that have avatars.
-    ///
-    /// - `path`: Optional path to contacts database. If None, scans default macOS locations.
-    /// - `sources_dir`: Base AddressBook/Sources directory containing Images folders
     pub fn get_avatar_paths(
         &self,
         path: Option<&Path>,
         _sources_dir: Option<&Path>,
-    ) -> Result<HashMap<String, PathBuf>, TableError> {
+    ) -> anyhow::Result<HashMap<String, PathBuf>> {
         let mut avatar_map = HashMap::new();
 
         if let Some(path) = path {
-            let conn = get_connection(path)?;
+            let conn = open_readonly_connection(path)?;
             let db_dir = path.parent().unwrap_or(Path::new(""));
             Self::query_avatars_from_db(&conn, db_dir, &mut avatar_map)?;
         } else {
@@ -319,10 +311,7 @@ impl ContactsIndex {
         conn: &Connection,
         db_dir: &Path,
         avatar_map: &mut HashMap<String, PathBuf>,
-    ) -> Result<(), TableError> {
-        // Query contacts with avatars
-        // ZABCDRECORD has Z_PK (primary key)
-        // ZABCDIMAGES has ZOWNER (foreign key to ZABCDRECORD.Z_PK) and ZPATH (relative path to image)
+    ) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT r.Z_PK, r.ZFIRSTNAME, r.ZLASTNAME, p.ZFULLNUMBER, e.ZADDRESSNORMALIZED, i.ZPATH
              FROM ZABCDRECORD AS r
@@ -359,6 +348,12 @@ impl ContactsIndex {
 
         Ok(())
     }
+}
+
+/// Open a read-only SQLite connection
+fn open_readonly_connection(path: &Path) -> anyhow::Result<Connection> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    Ok(conn)
 }
 
 /// Check if a table or view exists in the database
@@ -417,26 +412,19 @@ fn parse_email_list(raw: &str) -> Vec<String> {
 
 // MARK: Phone
 /// Generate possible phone number keys from a raw phone number
-///
-/// - If the number contains "urn:", returns an empty vector
-/// - Returns keys with and without '+' prefix
-/// - For US numbers starting with +1 and 11 digits, also adds variants without the `+1` country code
 fn phone_keys(raw: &str) -> Vec<String> {
     // Skip iMessage business accounts
     if raw.contains("urn:") {
         return vec![];
     }
 
-    // The digits include the country code portion of the number
     let digits = to_phone_digits(raw);
     if digits.is_empty() {
         return vec![];
     }
 
-    // Create keys with and without '+' prefix for country code
     let mut keys = vec![digits.clone(), format!("+{digits}")];
 
-    // If the original was 12 chars starting with +1, add a variant without the `+1` (USA) country code
     if digits.len() == 11 && raw.starts_with("+1") {
         let last_10 = &digits[digits.len() - 10..];
         keys.push(last_10.to_string());
@@ -459,8 +447,7 @@ fn to_phone_digits(raw: &str) -> String {
 }
 
 // MARK: macOS Dirs
-/// Scans the macOS Contacts Sources directory (`~/Library/Application Support/AddressBook/Sources`)
-/// for AddressBook-v22.abcddb database files.
+/// Scans the macOS Contacts Sources directory for AddressBook databases.
 fn find_macos_addressbook_db_paths() -> Vec<PathBuf> {
     let mut results = Vec::new();
     if let Ok(entries) = fs::read_dir(macos_sources_dir()) {
@@ -477,9 +464,10 @@ fn find_macos_addressbook_db_paths() -> Vec<PathBuf> {
     results
 }
 
-/// Resolve the standard macOS Contacts Sources directory: `~/Library/Application Support/AddressBook/Sources`
+/// Resolve the standard macOS Contacts Sources directory
 fn macos_sources_dir() -> PathBuf {
-    PathBuf::from(&home())
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(&home)
         .join("Library")
         .join("Application Support")
         .join("AddressBook")
@@ -495,14 +483,12 @@ mod tests {
     fn test_phone_lookup_us_with_country_code_with_plus() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("John".to_string()), Some("Doe".to_string())).unwrap();
-        // Simulate building from db with "+12345678901" (US number with +1 and 10 digits)
         let db_phone = "+12345678901";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // Lookup with +1 should match
         assert_eq!(index.lookup("+12345678901"), Some(name.clone()));
     }
 
@@ -510,14 +496,12 @@ mod tests {
     fn test_phone_lookup_us_with_country_code_without_plus() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("John".to_string()), Some("Doe".to_string())).unwrap();
-        // Simulate building from db with "+12345678901" (US number with +1 and 10 digits)
         let db_phone = "+12345678901";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // Lookup without + should match
         assert_eq!(index.lookup("12345678901"), Some(name.clone()));
     }
 
@@ -525,14 +509,12 @@ mod tests {
     fn test_phone_lookup_us_with_country_code_without_plus1() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("John".to_string()), Some("Doe".to_string())).unwrap();
-        // Simulate building from db with "+12345678901" (US number with +1 and 10 digits)
         let db_phone = "+12345678901";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // Lookup without +1 should match (US variant)
         assert_eq!(index.lookup("2345678901"), Some(name.clone()));
     }
 
@@ -540,14 +522,12 @@ mod tests {
     fn test_phone_lookup_us_with_country_code_with_plus_without1() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("John".to_string()), Some("Doe".to_string())).unwrap();
-        // Simulate building from db with "+12345678901" (US number with +1 and 10 digits)
         let db_phone = "+12345678901";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // Lookup with + but without 1 should match
         assert_eq!(index.lookup("+2345678901"), Some(name.clone()));
     }
 
@@ -555,14 +535,12 @@ mod tests {
     fn test_phone_lookup_us_without_country_code_with_plus1() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("Jane".to_string()), Some("Smith".to_string())).unwrap();
-        // Simulate building from db with "1234567890" (no +1)
         let db_phone = "1234567890";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // Lookup with +1 should match
         assert_eq!(index.lookup("+1234567890"), Some(name.clone()));
     }
 
@@ -570,14 +548,12 @@ mod tests {
     fn test_phone_lookup_us_without_country_code_without_plus() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("Jane".to_string()), Some("Smith".to_string())).unwrap();
-        // Simulate building from db with "1234567890" (no +1)
         let db_phone = "1234567890";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // Lookup without + should match
         assert_eq!(index.lookup("1234567890"), Some(name.clone()));
     }
 
@@ -585,14 +561,12 @@ mod tests {
     fn test_phone_lookup_us_without_country_code_miss_without_plus() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("Jane".to_string()), Some("Smith".to_string())).unwrap();
-        // Simulate building from db with "1234567890" (no +1)
         let db_phone = "1234567890";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // For 10-digit db entry, no US variants added, so these should not match
         assert_eq!(index.lookup("34567890"), None);
     }
 
@@ -600,14 +574,12 @@ mod tests {
     fn test_phone_lookup_us_without_country_code_miss_with_plus() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("Jane".to_string()), Some("Smith".to_string())).unwrap();
-        // Simulate building from db with "1234567890" (no +1)
         let db_phone = "1234567890";
         let keys = phone_keys(db_phone);
         for key in keys {
             index.index.insert(key, name.clone());
         }
 
-        // For 10-digit db entry, no US variants added, so these should not match
         assert_eq!(index.lookup("+34567890"), None);
     }
 
@@ -615,12 +587,10 @@ mod tests {
     fn test_phone_lookup_uk_with_plus44() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("Alice".to_string()), Some("Brown".to_string())).unwrap();
-        // UK number +44 20 1234 5678
         index
             .index
             .insert("+442012345678".to_string(), name.clone());
 
-        // Lookup with +44 should match
         assert_eq!(index.lookup("+442012345678"), Some(name.clone()));
     }
 
@@ -628,26 +598,22 @@ mod tests {
     fn test_phone_lookup_uk_without_plus() {
         let mut index = ContactsIndex::default();
         let name = Name::from_opt(Some("Alice".to_string()), Some("Brown".to_string())).unwrap();
-        // UK number +44 20 1234 5678
         index
             .index
             .insert("+442012345678".to_string(), name.clone());
 
-        // Lookup without + should match
         assert_eq!(index.lookup("442012345678"), Some(name.clone()));
     }
 
     #[test]
     fn test_phone_lookup_miss_without_plus() {
         let index = ContactsIndex::default();
-        // No entries, should miss
         assert_eq!(index.lookup("1234567890"), None);
     }
 
     #[test]
     fn test_phone_lookup_miss_with_plus() {
         let index = ContactsIndex::default();
-        // No entries, should miss
         assert_eq!(index.lookup("+1234567890"), None);
     }
 
@@ -659,7 +625,6 @@ mod tests {
             .index
             .insert("steve@apple.com".to_string(), name.clone());
 
-        // Exact match
         assert_eq!(index.lookup("steve@apple.com"), Some(name.clone()));
     }
 
@@ -671,7 +636,6 @@ mod tests {
             .index
             .insert("steve@apple.com".to_string(), name.clone());
 
-        // Case insensitive
         assert_eq!(index.lookup("STEVE@APPLE.COM"), Some(name.clone()));
     }
 
@@ -683,7 +647,6 @@ mod tests {
             .index
             .insert("steve@apple.com".to_string(), name.clone());
 
-        // With angle brackets
         assert_eq!(index.lookup("<steve@apple.com>"), Some(name.clone()));
     }
 
@@ -695,48 +658,41 @@ mod tests {
             .index
             .insert("steve@apple.com".to_string(), name.clone());
 
-        // Trimmed
         assert_eq!(index.lookup(" steve@apple.com "), Some(name.clone()));
     }
 
     #[test]
     fn test_email_lookup_miss_no_entries() {
         let index = ContactsIndex::default();
-        // No entries
         assert_eq!(index.lookup("not@here.com"), None);
     }
 
     #[test]
     fn test_email_lookup_miss_phone_like() {
         let index = ContactsIndex::default();
-        // Phone-like but looks like email
         assert_eq!(index.lookup("123@456"), None);
     }
 
     #[test]
     fn test_phone_keys_contains_digits() {
-        // Test phone_keys function
         let keys = phone_keys("+12345678901");
         assert!(keys.contains(&"12345678901".to_string()));
     }
 
     #[test]
     fn test_phone_keys_contains_with_plus() {
-        // Test phone_keys function
         let keys = phone_keys("+12345678901");
         assert!(keys.contains(&"+12345678901".to_string()));
     }
 
     #[test]
     fn test_phone_keys_contains_last_10() {
-        // Test phone_keys function
         let keys = phone_keys("+12345678901");
         assert!(keys.contains(&"2345678901".to_string()));
     }
 
     #[test]
     fn test_phone_keys_contains_last_10_with_plus() {
-        // Test phone_keys function
         let keys = phone_keys("+12345678901");
         assert!(keys.contains(&"+2345678901".to_string()));
     }

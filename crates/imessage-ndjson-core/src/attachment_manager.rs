@@ -7,8 +7,6 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use hex;
-use imessage_database::tables::attachment::Attachment;
-use imessage_database::util::platform::Platform;
 use sha2::{Digest, Sha256};
 
 use crate::converters::{AudioConverter, Converter, ImageConverter, VideoConverter};
@@ -88,11 +86,8 @@ pub struct AttachmentManager {
     /// Cache mapping: hash -> copied path (for deduplication)
     hash_cache: HashMap<String, PathBuf>,
 
-    /// Platform (macOS or iOS)
-    platform: Platform,
-
-    /// Database path (for resolving attachment paths)
-    db_path: PathBuf,
+    /// Database path (reserved for future platform-specific path resolution)
+    _db_path: PathBuf,
 
     /// Image converter (if available)
     image_converter: Option<ImageConverter>,
@@ -110,7 +105,6 @@ impl AttachmentManager {
         output_dir: &Path,
         attachments_subdir: String,
         convert: bool,
-        platform: Platform,
         db_path: PathBuf,
     ) -> Self {
         // Detect converters if conversion is enabled
@@ -129,37 +123,30 @@ impl AttachmentManager {
             attachments_subdir,
             convert,
             hash_cache: HashMap::new(),
-            platform,
-            db_path,
+            _db_path: db_path,
             image_converter,
             video_converter,
             audio_converter,
         }
     }
 
-    /// Copy an attachment, returning relative path and optionally new MIME type
+    /// Copy an attachment from a resolved path, returning relative path and optionally new MIME type
     ///
-    /// This method:
-    /// 1. Resolves the attachment path using platform-specific logic
-    /// 2. Checks if the file exists
-    /// 3. Computes SHA256 hash of the file contents
-    /// 4. Checks the deduplication cache
-    /// 5. Converts the file if conversion is enabled and applicable
-    /// 6. Copies the file if not already cached
-    /// 7. Returns (relative_path, new_mime_type) - MIME type is Some if conversion occurred
-    pub fn copy_attachment(
+    /// This is the path-based version that works with imessage-db where we resolve paths ourselves.
+    pub fn copy_attachment_from_path(
         &mut self,
-        attachment: &Attachment,
-        chat_id: i32,
+        source_path: Option<&str>,
+        transfer_name: Option<&str>,
+        filename: Option<&str>,
+        mime_type: Option<&str>,
+        is_sticker: bool,
+        chat_id: i64,
     ) -> Result<(String, Option<String>), String> {
-        // 1. Resolve attachment path using platform-specific logic
-        let source_path =
-            match attachment.resolved_attachment_path(&self.platform, &self.db_path, None) {
-                Some(path) => PathBuf::from(path),
-                None => {
-                    return Err("No file path in database".to_string());
-                }
-            };
+        // 1. Resolve source path
+        let source_path = match source_path {
+            Some(p) => PathBuf::from(p),
+            None => return Err("No file path available".to_string()),
+        };
 
         // 2. Check if file exists
         if !source_path.exists() {
@@ -176,16 +163,14 @@ impl AttachmentManager {
 
         // 4. Check deduplication cache
         if let Some(cached_path) = self.hash_cache.get(&hash) {
-            // File already copied, return relative path (no MIME change for cached files)
             return Ok((self.make_relative_path(cached_path), None));
         }
 
         // 5. Determine file extension
-        let extension = self.get_extension(attachment, &source_path);
+        let extension = Self::get_extension_from_parts(transfer_name, filename, &source_path);
 
         // 6. Build destination path
-        // Format: {output_dir}/{attachments_subdir}/chat_{chat_id}/{hash_prefix}.{ext}
-        let hash_prefix = &hash[..16]; // First 16 chars (64 bits entropy)
+        let hash_prefix = &hash[..16];
         let dest_dir = self
             .output_dir
             .join(&self.attachments_subdir)
@@ -200,40 +185,38 @@ impl AttachmentManager {
         // 8. Convert or copy file
         use crate::converters::{audio, image, sticker, video};
 
-        let mime_type = attachment.mime_type.as_deref().unwrap_or("");
+        let mime = mime_type.unwrap_or("");
         let mut extension_changed = false;
 
-        // Try conversion if enabled
         if self.convert {
-            // Stickers get special handling (HEIC→PNG, HEICS→GIF)
-            if attachment.is_sticker && mime_type.starts_with("image/") {
+            if is_sticker && mime.starts_with("image/") {
                 extension_changed = sticker::convert_if_needed(
                     &source_path,
                     &mut dest_path,
                     &self.image_converter,
                     &self.video_converter,
-                    mime_type,
+                    mime,
                 );
-            } else if mime_type.starts_with("image/") {
+            } else if mime.starts_with("image/") {
                 extension_changed = image::convert_if_needed(
                     &source_path,
                     &mut dest_path,
                     &self.image_converter,
-                    mime_type,
+                    mime,
                 );
-            } else if mime_type.starts_with("video/") {
+            } else if mime.starts_with("video/") {
                 extension_changed = video::convert_if_needed(
                     &source_path,
                     &mut dest_path,
                     &self.video_converter,
-                    mime_type,
+                    mime,
                 );
-            } else if mime_type.starts_with("audio/") {
+            } else if mime.starts_with("audio/") {
                 extension_changed = audio::convert_if_needed(
                     &source_path,
                     &mut dest_path,
                     &self.audio_converter,
-                    mime_type,
+                    mime,
                 );
             }
         }
@@ -253,7 +236,7 @@ impl AttachmentManager {
                 "png" => Some("image/png".to_string()),
                 "gif" => Some("image/gif".to_string()),
                 "mp4" => Some("video/mp4".to_string()),
-                "m4a" => Some("audio/mp4".to_string()), // M4A is MP4 container with AAC
+                "m4a" => Some("audio/mp4".to_string()),
                 _ => None,
             }
         } else {
@@ -267,31 +250,19 @@ impl AttachmentManager {
         Ok((relative_path, new_mime))
     }
 
-    /// Embed an attachment as base64-encoded data
-    ///
-    /// This method:
-    /// 1. Resolves the attachment path
-    /// 2. Checks if the file exists
-    /// 3. Checks size limit
-    /// 4. Computes SHA256 hash
-    /// 5. Reads file contents
-    /// 6. Compresses if appropriate
-    /// 7. Base64 encodes
-    /// 8. Returns embedded data with metadata
-    pub fn embed_attachment(
+    /// Embed an attachment from a resolved path as base64-encoded data
+    pub fn embed_attachment_from_path(
         &mut self,
-        attachment: &Attachment,
+        source_path: Option<&str>,
+        mime_type: Option<&str>,
         compression_mode: CompressionMode,
         max_size: usize,
     ) -> Result<EmbeddedData, String> {
-        // 1. Resolve attachment path
-        let source_path =
-            match attachment.resolved_attachment_path(&self.platform, &self.db_path, None) {
-                Some(path) => PathBuf::from(path),
-                None => {
-                    return Err("No file path in database".to_string());
-                }
-            };
+        // 1. Resolve source path
+        let source_path = match source_path {
+            Some(p) => PathBuf::from(p),
+            None => return Err("No file path available".to_string()),
+        };
 
         // 2. Check if file exists
         if !source_path.exists() {
@@ -323,8 +294,7 @@ impl AttachmentManager {
         let content_hash = hex::encode(hasher.finalize());
 
         // 6. Determine compression method
-        let compression_method =
-            Self::should_compress(attachment.mime_type.as_deref(), compression_mode);
+        let compression_method = Self::should_compress(mime_type, compression_mode);
 
         // 7. Compress if needed
         let compressed_data = Self::compress_data(&file_data, compression_method)?;
@@ -427,31 +397,29 @@ impl AttachmentManager {
             .to_string()
     }
 
-    /// Get file extension from attachment or source path
-    fn get_extension(&self, attachment: &Attachment, source_path: &Path) -> String {
+    /// Get file extension from transfer_name, filename, or source path
+    fn get_extension_from_parts(
+        transfer_name: Option<&str>,
+        filename: Option<&str>,
+        source_path: &Path,
+    ) -> String {
         // Try transfer_name first
-        if let Some(ref transfer_name) = attachment.transfer_name {
-            if let Some(ext) = Path::new(transfer_name).extension() {
-                if let Some(ext_str) = ext.to_str() {
-                    return ext_str.to_string();
-                }
+        if let Some(name) = transfer_name {
+            if let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
+                return ext.to_string();
             }
         }
 
         // Try filename next
-        if let Some(ref filename) = attachment.filename {
-            if let Some(ext) = Path::new(filename).extension() {
-                if let Some(ext_str) = ext.to_str() {
-                    return ext_str.to_string();
-                }
+        if let Some(name) = filename {
+            if let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
+                return ext.to_string();
             }
         }
 
         // Fall back to source path extension
-        if let Some(ext) = source_path.extension() {
-            if let Some(ext_str) = ext.to_str() {
-                return ext_str.to_string();
-            }
+        if let Some(ext) = source_path.extension().and_then(|e| e.to_str()) {
+            return ext.to_string();
         }
 
         // Default to "bin" if no extension found
@@ -476,7 +444,6 @@ mod tests {
             temp_dir.path(),
             "attachments".to_string(),
             false,
-            Platform::macOS,
             PathBuf::new(),
         );
 
@@ -496,7 +463,6 @@ mod tests {
             temp_dir.path(),
             "attachments".to_string(),
             false,
-            Platform::macOS,
             PathBuf::new(),
         );
 
@@ -509,22 +475,4 @@ mod tests {
 
         assert_eq!(relative, "attachments/chat_1/test.jpg");
     }
-
-    // Note: The following tests are commented out because Attachment doesn't implement Default
-    // These extension extraction behaviors will be tested through integration tests
-
-    // #[test]
-    // fn test_extension_extraction() {
-    //     // Tests that transfer_name takes precedence
-    // }
-
-    // #[test]
-    // fn test_extension_fallback() {
-    //     // Tests fallback to source path extension
-    // }
-
-    // #[test]
-    // fn test_extension_default() {
-    //     // Tests default "bin" extension when none found
-    // }
 }

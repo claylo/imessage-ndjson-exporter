@@ -10,5 +10,7 @@ pub mod database;
 pub mod fixtures;
 
 // Re-export commonly used items for convenience
-pub use assertions::{assert_attachment_mode, assert_message_structure, assert_ndjson_valid};
+pub use assertions::{
+    assert_attachment_mode, assert_message_structure, assert_ndjson_valid, AttachmentMode,
+};
 pub use fixtures::{get_test_db_path, get_test_sticker, load_plist_file, load_typedstream_file};

@@ -1,4 +1,4 @@
-use imessage_database::tables::messages::Message;
+use imessage_db::imessage::entities::Message;
 use std::collections::HashMap;
 
 /// Resolves tapbacks (reactions) for messages

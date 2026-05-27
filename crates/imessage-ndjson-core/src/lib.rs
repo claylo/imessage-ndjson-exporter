@@ -2,6 +2,7 @@ pub mod attachment_manager;
 pub mod avatar_manager;
 pub mod contacts;
 pub mod converters;
+pub mod db;
 pub mod exporter;
 pub mod resolvers;
 pub mod serialization;

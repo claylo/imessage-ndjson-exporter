@@ -4,7 +4,7 @@ use serde::Serialize;
 #[derive(Debug, Serialize, Clone)]
 pub struct SerializableChatContext {
     /// Chat ID in database
-    pub chat_id: Option<i32>,
+    pub chat_id: Option<i64>,
     /// Chat identifier (phone number, email, or group chat ID)
     pub chat_identifier: String,
     /// Custom display name for the chat
@@ -20,7 +20,7 @@ pub struct SerializableChatContext {
 #[derive(Debug, Serialize, Clone)]
 pub struct SerializableSender {
     /// Handle ID in database
-    pub handle_id: Option<i32>,
+    pub handle_id: Option<i64>,
     /// Contact identifier (phone number or email)
     pub identifier: String,
     /// Resolved contact name

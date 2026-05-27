@@ -42,7 +42,7 @@ pub struct SerializableMessage {
 #[derive(Debug, Serialize, Clone)]
 pub struct MessageMetadata {
     /// Row ID in database
-    pub rowid: i32,
+    pub rowid: i64,
     /// Globally unique identifier
     pub guid: String,
     /// When the message was sent
@@ -64,7 +64,7 @@ pub struct MessageMetadata {
     pub is_read: bool,
     /// Chat ID this message belongs to
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chat_id: Option<i32>,
+    pub chat_id: Option<i64>,
     /// Whether this message was deleted from a chat
     pub is_deleted: bool,
 }
@@ -74,9 +74,9 @@ pub struct MessageMetadata {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SerializableGroupAction {
     /// New participant was added to the group
-    ParticipantAdded { participant_handle_id: i32 },
+    ParticipantAdded { participant_handle_id: i64 },
     /// Participant was removed from the group
-    ParticipantRemoved { participant_handle_id: i32 },
+    ParticipantRemoved { participant_handle_id: i64 },
     /// Group name was changed
     NameChange { new_name: String },
     /// Participant left the group

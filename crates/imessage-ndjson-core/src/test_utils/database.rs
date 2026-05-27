@@ -13,7 +13,7 @@ use std::path::Path;
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::{database, fixtures};
+/// use imessage_ndjson_core::test_utils::{database, fixtures};
 ///
 /// let db_path = fixtures::get_test_db_path();
 /// let conn = database::open_test_db(&db_path).unwrap();

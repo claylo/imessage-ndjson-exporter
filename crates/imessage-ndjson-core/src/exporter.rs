@@ -1,21 +1,8 @@
 use anyhow::{Context, Result};
-use imessage_database::{
-    message_types::variants::Announcement,
-    tables::{
-        attachment::Attachment,
-        chat::Chat,
-        chat_handle::ChatToHandle,
-        handle::Handle,
-        messages::{Message, models::GroupAction},
-        table::{Cacheable, Table, get_connection},
-    },
-    util::{platform::Platform, query_context::QueryContext},
-};
+use imessage_db::imessage::entities::{Chat, Handle, Message};
 use indicatif::{ProgressBar, ProgressStyle};
-use rusqlite::Connection;
-use serde_json;
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     fs::File,
     io::{BufWriter, Write as _},
     path::{Path, PathBuf},
@@ -25,13 +12,15 @@ use crate::{
     attachment_manager::{AttachmentManager, CompressionMode},
     avatar_manager::AvatarManager,
     contacts::ContactsIndex,
+    db::Database,
     resolvers::{ContactResolver, TapbackResolver},
     serialization::{
-        attachments::{AttachmentDimensions, SerializableAttachment},
+        attachments::SerializableAttachment,
         chat::{SerializableChatContext, SerializableSender},
         content::{ContentComponent, SerializableContent, TextAttribute, TextEffect},
         message::{
-            MessageMetadata, SerializableAnnouncement, SerializableGroupAction, SerializableMessage,
+            MessageMetadata, SerializableAnnouncement, SerializableGroupAction,
+            SerializableMessage,
         },
         participant::SerializableParticipant,
         relationships::SerializableRelationships,
@@ -52,8 +41,8 @@ pub struct NdjsonExporter {
     max_embed_size: usize,
     embed_compression: CompressionMode,
     include_avatars: bool,
-    start_timestamp: Option<i64>, // Cocoa epoch nanoseconds (inclusive)
-    end_timestamp: Option<i64>,   // Cocoa epoch nanoseconds (exclusive)
+    start_timestamp: Option<i64>, // Unix milliseconds (inclusive)
+    end_timestamp: Option<i64>,   // Unix milliseconds (exclusive)
 }
 
 impl NdjsonExporter {
@@ -77,17 +66,17 @@ impl NdjsonExporter {
     ) -> Result<Self> {
         use chrono::NaiveDate;
 
-        // Parse start date to Cocoa epoch nanoseconds (inclusive)
+        // Parse start date to Unix milliseconds (inclusive)
         let start_timestamp = start_date
-            .map(|s| parse_date_to_cocoa_nanos(&s))
+            .map(|s| parse_date_to_unix_ms(&s))
             .transpose()?;
 
-        // Parse end date to Cocoa epoch nanoseconds (exclusive - add 1 day)
+        // Parse end date to Unix milliseconds (exclusive - add 1 day)
         let end_timestamp = end_date
             .map(|s| {
                 let date = NaiveDate::parse_from_str(&s, "%Y-%m-%d")?;
                 let next_day = date + chrono::Duration::days(1);
-                parse_date_to_cocoa_nanos(&next_day.format("%Y-%m-%d").to_string())
+                parse_date_to_unix_ms(&next_day.format("%Y-%m-%d").to_string())
             })
             .transpose()?;
 
@@ -110,16 +99,14 @@ impl NdjsonExporter {
         })
     }
 
-    /// Resolve conversation filter to specific chat IDs and handle IDs
-    ///
-    /// Returns (selected_chat_ids, selected_handle_ids)
+    /// Resolve conversation filter to specific chat IDs
     fn resolve_filtered_chats(
         &self,
-        db: &Connection,
+        db: &Database,
         contacts_index: &ContactsIndex,
-        handles: &HashMap<i32, Handle>,
-        chats: &HashMap<i32, Chat>,
-    ) -> Result<BTreeSet<i32>> {
+        handles: &HashMap<i64, Handle>,
+        chats: &HashMap<i64, Chat>,
+    ) -> Result<BTreeSet<i64>> {
         let Some(ref filter) = self.conversation_filter else {
             return Ok(BTreeSet::new());
         };
@@ -128,21 +115,20 @@ impl NdjsonExporter {
         let filter_terms: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
 
         // Build participants map (handle_id -> handle details)
-        let participants: HashMap<i32, String> = handles
+        let participants: HashMap<i64, String> = handles
             .iter()
             .map(|(id, handle)| (*id, handle.id.clone()))
             .collect();
 
         // Build deduplication map (for ContactsIndex.build_participants_map)
-        // For simplicity, map each handle to itself (no deduplication)
-        let deduped_handles: HashMap<i32, i32> = handles.keys().map(|&id| (id, id)).collect();
+        let deduped_handles: HashMap<i64, i64> = handles.keys().map(|&id| (id, id)).collect();
 
         // Use ContactsIndex to build participants map with Names
         let participants_with_names =
             contacts_index.build_participants_map(&participants, &deduped_handles);
 
         // Find matching handle_ids
-        let mut included_handles: HashSet<i32> = HashSet::new();
+        let mut included_handles: BTreeSet<i64> = BTreeSet::new();
         for name in participants_with_names.values() {
             for filter_term in &filter_terms {
                 if name.contains(filter_term) {
@@ -151,52 +137,30 @@ impl NdjsonExporter {
             }
         }
 
-        // Build chatroom participants map (chat_id -> set of handle_ids in that chat)
-        let mut chatroom_participants: HashMap<i32, HashSet<i32>> = HashMap::new();
-
-        // Query chat_handle_join table to get participants for each chat
-        let mut stmt =
-            db.prepare("SELECT chat_id, handle_id FROM chat_handle_join ORDER BY chat_id")?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let chat_id: i32 = row.get(0)?;
-            let handle_id: i32 = row.get(1)?;
-            chatroom_participants
-                .entry(chat_id)
-                .or_default()
-                .insert(handle_id);
-        }
+        // Build chatroom participants map from loaded chats
+        let chatroom_participants = db.build_chatroom_participants(chats);
 
         // Find chats containing the selected handles
-        let mut included_chatrooms: BTreeSet<i32> = BTreeSet::new();
+        let mut included_chatrooms: BTreeSet<i64> = BTreeSet::new();
         for (chat_id, participants) in &chatroom_participants {
-            // Include chat if it contains any of the selected handles
             if !participants.is_disjoint(&included_handles) {
                 included_chatrooms.insert(*chat_id);
             }
         }
 
-        // Also check all chats to see if they have messages from selected handles
-        // (handles 1:1 chats that may not be in chat_handle_join)
-        for chat_id in chats.keys() {
+        // For chats not yet included, check if they have a chat_identifier matching a handle
+        for (chat_id, chat) in chats {
             if included_chatrooms.contains(chat_id) {
-                continue; // Already included
+                continue;
             }
 
-            // Check if this chat has any messages from our selected handles
-            // Use chat_message_join to link messages to chats
-            for &handle_id in &included_handles {
-                let mut stmt = db.prepare(
-                    "SELECT 1 FROM message m
-                     INNER JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-                     WHERE cmj.chat_id = ? AND m.handle_id = ? LIMIT 1",
-                )?;
-                let has_message: Result<i32, _> =
-                    stmt.query_row([chat_id, &handle_id], |row| row.get(0));
-
-                if has_message.is_ok() {
-                    included_chatrooms.insert(*chat_id);
-                    break;
+            // For 1:1 chats, the chat_identifier often IS the handle identifier
+            if let Some(ref chat_ident) = chat.chat_identifier {
+                for handle in handles.values() {
+                    if included_handles.contains(&handle.rowid) && handle.id == *chat_ident {
+                        included_chatrooms.insert(*chat_id);
+                        break;
+                    }
                 }
             }
         }
@@ -206,8 +170,7 @@ impl NdjsonExporter {
 
     pub fn export(&self) -> Result<()> {
         // Connect to database
-        let db = get_connection(&self.database_path)
-            .map_err(|e| anyhow::anyhow!("Failed to connect to iMessage database: {:?}", e))?;
+        let db = Database::open(&self.database_path)?;
 
         // Validate converters if conversion is requested (strict mode)
         if self.convert_attachments {
@@ -233,9 +196,6 @@ impl NdjsonExporter {
                 );
             }
         }
-
-        // Get timezone offset (not critical if it fails, use 0)
-        let offset = 0i64;
 
         // Build caches
         if self.show_progress {
@@ -296,7 +256,6 @@ impl NdjsonExporter {
                 &self.output_dir,
                 self.attachments_dir.clone(),
                 self.convert_attachments,
-                Platform::macOS,
                 self.database_path.clone(),
             ))
         } else {
@@ -346,7 +305,6 @@ impl NdjsonExporter {
                 &tapbacks,
                 &mut contact_resolver,
                 &mut attachment_manager,
-                offset,
             )?;
 
             // Write participants file if avatars are enabled and messages were exported
@@ -383,48 +341,30 @@ impl NdjsonExporter {
     #[allow(clippy::type_complexity)]
     fn build_caches(
         &self,
-        db: &Connection,
+        db: &Database,
     ) -> Result<(
-        HashMap<i32, Chat>,
-        HashMap<i32, Handle>,
+        HashMap<i64, Chat>,
+        HashMap<i64, Handle>,
         TapbackResolver,
-        HashMap<i32, BTreeSet<i32>>,
+        HashMap<i64, BTreeSet<i64>>,
     )> {
         // Build chat cache
-        let mut chats = HashMap::new();
-        let _ = Chat::stream(db, |chat_result| {
-            if let Ok(chat) = chat_result {
-                chats.insert(chat.rowid, chat);
-            }
-            Ok::<(), anyhow::Error>(())
-        });
+        let chats = db.load_chats()?;
 
         // Build handle cache
-        let mut handles = HashMap::new();
-        let _ = Handle::stream(db, |handle_result| {
-            if let Ok(handle) = handle_result {
-                handles.insert(handle.rowid, handle);
-            }
-            Ok::<(), anyhow::Error>(())
-        });
+        let handles = db.load_handles()?;
 
         // Build tapback cache
+        let tapback_map = db.load_tapbacks()?;
         let mut tapbacks = TapbackResolver::new();
-        let _ = Message::stream(db, |msg_result| {
-            if let Ok(msg) = msg_result {
-                if msg.is_tapback() {
-                    if let Some(ref associated_guid) = msg.associated_message_guid {
-                        tapbacks.add_tapback(associated_guid.clone(), msg);
-                    }
-                }
+        for (guid, msgs) in tapback_map {
+            for msg in msgs {
+                tapbacks.add_tapback(guid.clone(), msg);
             }
-            Ok::<(), anyhow::Error>(())
-        });
+        }
 
-        // Build chat-to-handle cache (participant membership)
-        let chatroom_participants = ChatToHandle::cache(db).map_err(|e| {
-            anyhow::anyhow!("Failed to cache chat-to-handle relationships: {:?}", e)
-        })?;
+        // Build chatroom participants from loaded chats
+        let chatroom_participants = db.build_chatroom_participants(&chats);
 
         Ok((chats, handles, tapbacks, chatroom_participants))
     }
@@ -432,14 +372,13 @@ impl NdjsonExporter {
     #[allow(clippy::too_many_arguments)]
     fn export_chat(
         &self,
-        db: &Connection,
-        chat_id: i32,
+        db: &Database,
+        chat_id: i64,
         chat: &Chat,
-        handles: &HashMap<i32, Handle>,
+        handles: &HashMap<i64, Handle>,
         tapbacks: &TapbackResolver,
         contact_resolver: &mut ContactResolver,
         attachment_manager: &mut Option<AttachmentManager>,
-        offset: i64,
     ) -> Result<usize> {
         // Create output file for this chat
         let filename = format!("chat_{}.ndjson", chat_id);
@@ -448,68 +387,37 @@ impl NdjsonExporter {
             .context(format!("Failed to create output file: {:?}", output_path))?;
         let mut writer = BufWriter::new(file);
 
-        // Get messages for this chat
-        let _query_context = QueryContext {
-            selected_chat_ids: Some(BTreeSet::from([chat_id])),
-            ..QueryContext::default()
-        };
+        // Get messages for this chat using the chat's guid
+        let messages = db.messages_for_chat(
+            &chat.guid,
+            self.start_timestamp,
+            self.end_timestamp,
+        )?;
 
         let mut message_count = 0;
-        Message::stream(db, |msg_result| {
-            if let Ok(mut msg) = msg_result {
-                // Only export messages in this chat
-                if msg.chat_id != Some(chat_id) {
-                    return Ok::<(), anyhow::Error>(());
-                }
 
-                // Apply date filters
-                if let Some(start) = self.start_timestamp {
-                    if msg.date < start {
-                        return Ok(()); // Skip message before start date
-                    }
-                }
-                if let Some(end) = self.end_timestamp {
-                    if msg.date >= end {
-                        return Ok(()); // Skip message at or after end date (exclusive)
-                    }
-                }
+        for msg in &messages {
+            // Convert to serializable format
+            let serializable = self.convert_message(
+                msg,
+                chat_id,
+                chat,
+                handles,
+                tapbacks,
+                contact_resolver,
+                attachment_manager,
+            )?;
 
-                // Generate message text and components
-                if let Err(e) = msg.generate_text(db) {
-                    eprintln!(
-                        "Warning: Failed to generate text for message {}: {}",
-                        msg.guid, e
-                    );
-                }
+            // Write as JSON
+            serde_json::to_writer(&mut writer, &serializable)?;
+            writeln!(&mut writer)?;
 
-                // Convert to serializable format
-                let serializable = self.convert_message(
-                    db,
-                    &msg,
-                    chat_id,
-                    chat,
-                    handles,
-                    tapbacks,
-                    contact_resolver,
-                    attachment_manager,
-                    offset,
-                )?;
+            message_count += 1;
+        }
 
-                // Write as JSON
-                serde_json::to_writer(&mut writer, &serializable)?;
-                writeln!(&mut writer)?;
-
-                message_count += 1;
-            }
-            Ok::<(), anyhow::Error>(())
-        })
-        .map_err(|e| anyhow::anyhow!("Failed to stream messages: {:?}", e))?;
-
-        // If no messages were exported (due to date filtering or otherwise), skip this chat
+        // If no messages were exported, clean up the empty file
         if message_count == 0 {
-            // Drop the writer to close the file
             drop(writer);
-            // Delete the empty file
             std::fs::remove_file(&output_path)?;
             return Ok(0);
         }
@@ -522,110 +430,52 @@ impl NdjsonExporter {
     #[allow(clippy::too_many_arguments)]
     fn convert_message(
         &self,
-        db: &Connection,
         msg: &Message,
-        chat_id: i32,
+        chat_id: i64,
         chat: &Chat,
-        handles: &HashMap<i32, Handle>,
+        handles: &HashMap<i64, Handle>,
         _tapbacks: &TapbackResolver,
         contact_resolver: &mut ContactResolver,
         attachment_manager: &mut Option<AttachmentManager>,
-        offset: i64,
     ) -> Result<SerializableMessage> {
         // Determine message type
-        let message_type = if msg.is_tapback() {
-            "tapback"
-        } else if msg.is_edited() {
-            "edited"
-        } else if msg.is_announcement() {
-            "announcement"
-        } else {
-            "normal"
-        }
-        .to_string();
+        let message_type = determine_message_type(msg);
 
         // Build metadata
         let metadata = MessageMetadata {
             rowid: msg.rowid,
             guid: msg.guid.clone(),
-            date: format_timestamp(msg.date, offset),
-            date_read: if msg.date_read > 0 {
-                Some(format_timestamp(msg.date_read, offset))
-            } else {
-                None
-            },
-            date_delivered: if msg.date_delivered > 0 {
-                Some(format_timestamp(msg.date_delivered, offset))
-            } else {
-                None
-            },
-            date_edited: if msg.date_edited > 0 {
-                Some(format_timestamp(msg.date_edited, offset))
-            } else {
-                None
-            },
+            date: format_timestamp_ms(msg.date),
+            date_read: msg.date_read.map(|d| format_timestamp_ms(Some(d))),
+            date_delivered: msg.date_delivered.map(|d| format_timestamp_ms(Some(d))),
+            date_edited: msg.date_edited.map(|d| format_timestamp_ms(Some(d))),
             service: msg.service.as_deref().unwrap_or("Unknown").to_string(),
             is_from_me: msg.is_from_me,
             is_read: msg.is_read,
-            chat_id: msg.chat_id,
-            is_deleted: msg.deleted_from.is_some(),
+            chat_id: Some(chat_id),
+            is_deleted: msg.date_retracted.is_some(),
         };
 
         // Build sender info
         let sender = self.build_sender(msg, handles, contact_resolver);
 
         // Build chat context
-        let chat_context = self.build_chat_context(chat, handles);
+        let chat_context = self.build_chat_context(chat);
 
         // Build content
-        let content = self.build_content(db, msg, chat_id, attachment_manager)?;
+        let content = self.build_content(msg, chat_id, attachment_manager)?;
 
         // Build relationships
         let relationships = SerializableRelationships {
             thread_originator_guid: msg.thread_originator_guid.clone(),
             thread_originator_part: msg.thread_originator_part.clone(),
-            num_replies: msg.num_replies,
+            num_replies: 0, // imessage-db doesn't track reply counts directly
             tapbacks: vec![],   // TODO: Implement tapback resolution
             edit_history: None, // TODO: Implement edit history
         };
 
         // Build announcement metadata
-        let announcement = if msg.is_announcement() {
-            msg.get_announcement().and_then(|ann| match ann {
-                Announcement::FullyUnsent => Some(SerializableAnnouncement::FullyUnsent),
-                Announcement::GroupAction(action) => {
-                    let serializable_action = match action {
-                        GroupAction::ParticipantAdded(handle_id) => {
-                            SerializableGroupAction::ParticipantAdded {
-                                participant_handle_id: handle_id,
-                            }
-                        }
-                        GroupAction::ParticipantRemoved(handle_id) => {
-                            SerializableGroupAction::ParticipantRemoved {
-                                participant_handle_id: handle_id,
-                            }
-                        }
-                        GroupAction::NameChange(name) => SerializableGroupAction::NameChange {
-                            new_name: name.to_string(),
-                        },
-                        GroupAction::ParticipantLeft => SerializableGroupAction::ParticipantLeft,
-                        GroupAction::GroupIconChanged => SerializableGroupAction::GroupIconChanged,
-                        GroupAction::GroupIconRemoved => SerializableGroupAction::GroupIconRemoved,
-                        GroupAction::ChatBackgroundChanged => {
-                            SerializableGroupAction::ChatBackgroundChanged
-                        }
-                        GroupAction::ChatBackgroundRemoved => {
-                            SerializableGroupAction::ChatBackgroundRemoved
-                        }
-                    };
-                    Some(SerializableAnnouncement::GroupAction(serializable_action))
-                }
-                Announcement::AudioMessageKept => Some(SerializableAnnouncement::AudioMessageKept),
-                Announcement::Unknown(_) => None,
-            })
-        } else {
-            None
-        };
+        let announcement = build_announcement(msg);
 
         Ok(SerializableMessage {
             message_type,
@@ -642,42 +492,55 @@ impl NdjsonExporter {
     fn build_sender(
         &self,
         msg: &Message,
-        handles: &HashMap<i32, Handle>,
+        handles: &HashMap<i64, Handle>,
         contact_resolver: &mut ContactResolver,
     ) -> SerializableSender {
-        let (identifier, contact_name) = if let Some(handle_id) = msg.handle_id {
-            if let Some(handle) = handles.get(&handle_id) {
-                let id = handle.id.clone();
-                let name = contact_resolver.resolve_name(&id, msg.is_from_me);
-                (id, name)
-            } else {
-                ("Unknown".to_string(), None)
-            }
-        } else {
+        if msg.is_from_me {
             let id = "Me".to_string();
             let name = contact_resolver.resolve_name(&id, true);
-            (id, name)
-        };
+            return SerializableSender {
+                handle_id: None,
+                identifier: id,
+                contact_name: name,
+            };
+        }
+
+        let handle_id = msg.handle_id;
+        if handle_id > 0 {
+            if let Some(handle) = handles.get(&handle_id) {
+                let id = handle.id.clone();
+                let name = contact_resolver.resolve_name(&id, false);
+                return SerializableSender {
+                    handle_id: Some(handle_id),
+                    identifier: id,
+                    contact_name: name,
+                };
+            }
+        }
 
         SerializableSender {
-            handle_id: msg.handle_id,
-            identifier,
-            contact_name,
+            handle_id: if handle_id > 0 { Some(handle_id) } else { None },
+            identifier: "Unknown".to_string(),
+            contact_name: None,
         }
     }
 
-    fn build_chat_context(
-        &self,
-        chat: &Chat,
-        _handles: &HashMap<i32, Handle>,
-    ) -> SerializableChatContext {
-        // Get participants (simplified - just the chat identifier for now)
-        let participants = vec![chat.chat_identifier.clone()];
+    fn build_chat_context(&self, chat: &Chat) -> SerializableChatContext {
+        let chat_identifier = chat
+            .chat_identifier
+            .clone()
+            .unwrap_or_else(|| chat.guid.clone());
+
+        let participants: Vec<String> = if chat.participants.is_empty() {
+            vec![chat_identifier.clone()]
+        } else {
+            chat.participants.iter().map(|h| h.id.clone()).collect()
+        };
 
         SerializableChatContext {
             chat_id: Some(chat.rowid),
-            chat_identifier: chat.chat_identifier.clone(),
-            display_name: chat.display_name().map(String::from),
+            chat_identifier,
+            display_name: chat.display_name.clone(),
             service_name: chat
                 .service_name
                 .as_deref()
@@ -689,193 +552,134 @@ impl NdjsonExporter {
 
     fn build_content(
         &self,
-        db: &Connection,
         msg: &Message,
-        chat_id: i32,
+        chat_id: i64,
         attachment_manager: &mut Option<AttachmentManager>,
     ) -> Result<SerializableContent> {
         let mut components = Vec::new();
 
-        // Convert message components to serializable format
-        for component in &msg.components {
-            use imessage_database::tables::messages::models::BubbleComponent;
+        // Get message text - try msg.text first, then decode attributed_body
+        let text = get_message_text(msg);
 
-            match component {
-                BubbleComponent::Text(attributes) => {
-                    // Build text component with attributes
-                    let text = msg.text.as_deref().unwrap_or("").to_string();
-                    let attrs = attributes
-                        .iter()
-                        .map(|attr| {
-                            let effects = attr
-                                .effects
-                                .iter()
-                                .map(|effect| {
-                                    use imessage_database::message_types::text_effects::TextEffect as DbEffect;
-                                    match effect {
-                                        DbEffect::Mention(id) => TextEffect::Mention {
-                                            identifier: id.clone(),
-                                        },
-                                        DbEffect::Link(url) => TextEffect::Link { url: url.clone() },
-                                        DbEffect::OTP => TextEffect::OTP,
-                                        DbEffect::Conversion(_) => TextEffect::Conversion,
-                                        _ => TextEffect::Default,
-                                    }
-                                })
-                                .collect();
+        // Build text component if there's text
+        if let Some(ref text_str) = text {
+            if !text_str.is_empty() {
+                let attributes = build_text_attributes(msg);
+                components.push(ContentComponent::Text {
+                    text: text_str.clone(),
+                    attributes,
+                });
+            }
+        }
 
-                            TextAttribute {
-                                start: attr.start,
-                                end: attr.end,
-                                effects,
-                            }
-                        })
-                        .collect();
+        // Handle retracted messages
+        if msg.date_retracted.is_some() && text.is_none() && msg.attachments.is_empty() {
+            components.push(ContentComponent::Retracted);
+        }
 
-                    components.push(ContentComponent::Text {
-                        text,
-                        attributes: attrs,
-                    });
-                }
-                BubbleComponent::Attachment(meta) => {
-                    // Query full attachment from database
-                    let attachments = Attachment::from_message(db, msg)
-                        .map_err(|e| anyhow::anyhow!("Failed to query attachment: {:?}", e))?;
+        // Handle attachments (eager-loaded on the message)
+        for att in &msg.attachments {
+            let original_path = att
+                .filename
+                .as_ref()
+                .map(|f| resolve_attachment_path(f));
 
-                    // Find matching attachment by GUID
-                    let attachment = attachments.into_iter().find(|att| {
-                        meta.guid
-                            .as_ref()
-                            .map(|g| {
-                                att.filename
-                                    .as_ref()
-                                    .map(|f| f.contains(g))
-                                    .unwrap_or(false)
-                            })
-                            .unwrap_or(true)
-                    });
+            // Track converted MIME type
+            let mut converted_mime_type: Option<String> = None;
 
-                    if let Some(att) = attachment {
-                        // Track converted MIME type (if conversion occurred)
-                        let mut converted_mime_type: Option<String> = None;
-
-                        // Get original path for reference-in-place mode
-                        let original_path = att.path().and_then(|p| p.to_str()).map(String::from);
-
-                        // Handle attachment based on mode (embed, copy, or reference-in-place)
-                        let (
-                            copied_path,
-                            copy_error,
-                            embedded_data,
-                            embedded_encoding,
-                            embedded_compression,
-                            content_hash,
-                        ) = if self.embed_attachments {
-                            // Embed mode
-                            if let Some(ref mut mgr) = attachment_manager {
-                                match mgr.embed_attachment(
-                                    &att,
-                                    self.embed_compression,
-                                    self.max_embed_size,
-                                ) {
-                                    Ok(embedded) => (
-                                        None,
-                                        None,
-                                        Some(embedded.data),
-                                        Some(embedded.encoding),
-                                        Some(embedded.compression),
-                                        Some(embedded.content_hash),
-                                    ),
-                                    Err(err) => (None, Some(err), None, None, None, None),
-                                }
-                            } else {
-                                (None, None, None, None, None, None)
-                            }
-                        } else if self.copy_attachments {
-                            // Copy mode
-                            if let Some(ref mut mgr) = attachment_manager {
-                                match mgr.copy_attachment(&att, chat_id) {
-                                    Ok((path, new_mime)) => {
-                                        // Store converted MIME type if conversion occurred
-                                        converted_mime_type = new_mime;
-                                        (Some(path), None, None, None, None, None)
-                                    }
-                                    Err(err) => (None, Some(err), None, None, None, None),
-                                }
-                            } else {
-                                (None, None, None, None, None, None)
-                            }
-                        } else {
-                            // Reference-in-place mode (default)
-                            // No copying or embedding, just reference the original path
-                            (None, None, None, None, None, None)
-                        };
-
-                        // Use converted MIME type if available, otherwise use original
-                        let final_mime_type = converted_mime_type.or_else(|| att.mime_type.clone());
-
-                        // Build SerializableAttachment
-                        let serializable = SerializableAttachment {
-                            guid: meta.guid.clone(),
-                            filename: att.filename.clone(),
-                            transfer_name: att.transfer_name.clone(),
-                            mime_type: final_mime_type,
-                            uti: att.uti.clone(),
-                            size_bytes: att.total_bytes,
-                            transcription: meta.transcription.clone(),
-                            dimensions: match (meta.width, meta.height) {
-                                (Some(w), Some(h)) => Some(AttachmentDimensions {
-                                    width: w,
-                                    height: h,
-                                }),
-                                _ => None,
-                            },
-                            is_sticker: att.is_sticker,
-                            sticker_metadata: None,
-                            original_path,
-                            copied_path,
-                            copy_error,
-                            embedded_data,
-                            embedded_encoding,
-                            embedded_compression,
-                            content_hash,
-                        };
-
-                        components.push(ContentComponent::Attachment(serializable));
-                    } else {
-                        // Attachment not found - include metadata with error
-                        components.push(ContentComponent::Attachment(SerializableAttachment {
-                            guid: meta.guid.clone(),
-                            filename: None,
-                            transfer_name: None,
-                            mime_type: None,
-                            uti: None,
-                            size_bytes: 0,
-                            transcription: meta.transcription.clone(),
-                            dimensions: None,
-                            is_sticker: false,
-                            sticker_metadata: None,
-                            original_path: None,
-                            copied_path: None,
-                            copy_error: Some("Attachment not found in database".to_string()),
-                            embedded_data: None,
-                            embedded_encoding: None,
-                            embedded_compression: None,
-                            content_hash: None,
-                        }));
+            let (
+                copied_path,
+                copy_error,
+                embedded_data,
+                embedded_encoding,
+                embedded_compression,
+                content_hash,
+            ) = if self.embed_attachments {
+                // Embed mode
+                if let Some(ref mut mgr) = attachment_manager {
+                    match mgr.embed_attachment_from_path(
+                        original_path.as_deref(),
+                        att.mime_type.as_deref(),
+                        self.embed_compression,
+                        self.max_embed_size,
+                    ) {
+                        Ok(embedded) => (
+                            None,
+                            None,
+                            Some(embedded.data),
+                            Some(embedded.encoding),
+                            Some(embedded.compression),
+                            Some(embedded.content_hash),
+                        ),
+                        Err(err) => (None, Some(err), None, None, None, None),
                     }
+                } else {
+                    (None, None, None, None, None, None)
                 }
-                BubbleComponent::App => {
-                    // TODO: Implement app message conversion
+            } else if self.copy_attachments {
+                // Copy mode
+                if let Some(ref mut mgr) = attachment_manager {
+                    match mgr.copy_attachment_from_path(
+                        original_path.as_deref(),
+                        att.transfer_name.as_deref(),
+                        att.filename.as_deref(),
+                        att.mime_type.as_deref(),
+                        att.is_sticker.unwrap_or(false),
+                        chat_id,
+                    ) {
+                        Ok((path, new_mime)) => {
+                            converted_mime_type = new_mime;
+                            (Some(path), None, None, None, None, None)
+                        }
+                        Err(err) => (None, Some(err), None, None, None, None),
+                    }
+                } else {
+                    (None, None, None, None, None, None)
                 }
-                BubbleComponent::Retracted => {
-                    components.push(ContentComponent::Retracted);
-                }
+            } else {
+                // Reference-in-place mode (default)
+                (None, None, None, None, None, None)
+            };
+
+            let final_mime_type = converted_mime_type.or_else(|| att.mime_type.clone());
+
+            let serializable = SerializableAttachment {
+                guid: Some(att.guid.clone()),
+                filename: att.filename.clone(),
+                transfer_name: att.transfer_name.clone(),
+                mime_type: final_mime_type,
+                uti: att.uti.clone(),
+                size_bytes: att.total_bytes,
+                transcription: None, // Not available in imessage-db
+                dimensions: None,    // Not available in imessage-db entity directly
+                is_sticker: att.is_sticker.unwrap_or(false),
+                sticker_metadata: None,
+                original_path,
+                copied_path,
+                copy_error,
+                embedded_data,
+                embedded_encoding,
+                embedded_compression,
+                content_hash,
+            };
+
+            components.push(ContentComponent::Attachment(serializable));
+        }
+
+        // Handle app messages
+        if let Some(ref bundle_id) = msg.balloon_bundle_id {
+            if !bundle_id.is_empty() {
+                components.push(ContentComponent::App {
+                    balloon_bundle_id: bundle_id.clone(),
+                    app_name: None,
+                    app_type: "balloon".to_string(),
+                    metadata: None,
+                });
             }
         }
 
         Ok(SerializableContent {
-            text: msg.text.clone(),
+            text,
             subject: msg.subject.clone(),
             components,
         })
@@ -884,9 +688,9 @@ impl NdjsonExporter {
     /// Write participants file for a chat
     fn write_participants_file(
         &self,
-        chat_id: i32,
-        handles: &HashMap<i32, Handle>,
-        chatroom_participants: &HashMap<i32, BTreeSet<i32>>,
+        chat_id: i64,
+        handles: &HashMap<i64, Handle>,
+        chatroom_participants: &HashMap<i64, BTreeSet<i64>>,
         contact_resolver: &mut ContactResolver,
         avatar_manager: &mut Option<AvatarManager>,
         avatar_paths: &HashMap<String, PathBuf>,
@@ -951,42 +755,224 @@ impl NdjsonExporter {
     }
 }
 
-fn format_timestamp(timestamp: i64, _offset: i64) -> String {
-    if timestamp == 0 {
+/// Determine message type from message fields.
+fn determine_message_type(msg: &Message) -> String {
+    // Tapback: has associated_message_type set
+    if msg.associated_message_type.is_some() {
+        return "tapback".to_string();
+    }
+
+    // Edited: has date_edited set
+    if msg.date_edited.is_some() {
+        return "edited".to_string();
+    }
+
+    // Announcement: group actions (item_type != 0) or group_title changes
+    if msg.item_type != 0 || msg.group_title.is_some() {
+        return "announcement".to_string();
+    }
+
+    "normal".to_string()
+}
+
+/// Build announcement from message fields.
+fn build_announcement(msg: &Message) -> Option<SerializableAnnouncement> {
+    // Fully unsent (retracted with no content)
+    if msg.date_retracted.is_some() && msg.text.is_none() {
+        return Some(SerializableAnnouncement::FullyUnsent);
+    }
+
+    // Group actions based on item_type and group_action_type
+    // item_type values from iMessage:
+    // 0 = normal message
+    // 1 = participant change
+    // 2 = group name/photo change
+    // 3 = group action
+    match msg.item_type {
+        1 => {
+            // Participant changes
+            match msg.group_action_type {
+                0 => Some(SerializableAnnouncement::GroupAction(
+                    SerializableGroupAction::ParticipantAdded {
+                        participant_handle_id: msg.other_handle,
+                    },
+                )),
+                1 => Some(SerializableAnnouncement::GroupAction(
+                    SerializableGroupAction::ParticipantRemoved {
+                        participant_handle_id: msg.other_handle,
+                    },
+                )),
+                _ => None,
+            }
+        }
+        2 => {
+            // Group name change
+            if let Some(ref name) = msg.group_title {
+                Some(SerializableAnnouncement::GroupAction(
+                    SerializableGroupAction::NameChange {
+                        new_name: name.clone(),
+                    },
+                ))
+            } else {
+                // Group icon changed
+                Some(SerializableAnnouncement::GroupAction(
+                    SerializableGroupAction::GroupIconChanged,
+                ))
+            }
+        }
+        3 => {
+            // Audio message kept
+            Some(SerializableAnnouncement::AudioMessageKept)
+        }
+        _ => None,
+    }
+}
+
+/// Get message text, trying msg.text first, then decoding attributed_body.
+fn get_message_text(msg: &Message) -> Option<String> {
+    // msg.text is already populated by imessage-db
+    if let Some(ref text) = msg.text {
+        if !text.is_empty() {
+            return Some(text.clone());
+        }
+    }
+
+    // Fallback: decode attributed_body blob
+    if let Some(ref body) = msg.attributed_body {
+        if !body.is_empty() {
+            if let Some(text) = imessage_core::typedstream::extract_text(body) {
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Build text attributes from attributed_body blob.
+fn build_text_attributes(msg: &Message) -> Vec<TextAttribute> {
+    let Some(ref body) = msg.attributed_body else {
+        return vec![];
+    };
+
+    if body.is_empty() {
+        return vec![];
+    }
+
+    let Some(decoded) = imessage_core::typedstream::decode_attributed_body(body) else {
+        return vec![];
+    };
+
+    // decoded is a JSON array of NSAttributedString objects
+    // Each has "string" and "runs" fields
+    let mut attributes = Vec::new();
+
+    if let Some(items) = decoded.as_array() {
+        for item in items {
+            if let Some(runs) = item.get("runs").and_then(|r| r.as_array()) {
+                for run in runs {
+                    let range = run.get("range").and_then(|r| r.as_array());
+                    let attrs = run.get("attributes").and_then(|a| a.as_object());
+
+                    if let (Some(range), Some(attrs)) = (range, attrs) {
+                        let start = range.first().and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        let length = range.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        let end = start + length;
+
+                        let mut effects = Vec::new();
+
+                        // Map known attribute keys to TextEffect variants
+                        for (key, value) in attrs {
+                            match key.as_str() {
+                                "__kIMMessagePartAttributeName" => {
+                                    // Mention
+                                    if let Some(id) = value.as_str() {
+                                        effects.push(TextEffect::Mention {
+                                            identifier: id.to_string(),
+                                        });
+                                    }
+                                }
+                                "__kIMLinkAttributeName" | "NSLink" => {
+                                    if let Some(url) = value.as_str() {
+                                        effects.push(TextEffect::Link {
+                                            url: url.to_string(),
+                                        });
+                                    }
+                                }
+                                "__kIMOneTimeCodeAttributeName" => {
+                                    effects.push(TextEffect::OTP);
+                                }
+                                "__kIMDataDetectorResultAttributeName" => {
+                                    effects.push(TextEffect::Conversion);
+                                }
+                                _ => {
+                                    // Other attributes map to Default
+                                }
+                            }
+                        }
+
+                        if !effects.is_empty() {
+                            attributes.push(TextAttribute {
+                                start,
+                                end,
+                                effects,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    attributes
+}
+
+/// Resolve attachment path, expanding `~/` to home directory.
+fn resolve_attachment_path(filename: &str) -> String {
+    if filename.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        filename.replacen("~/", &format!("{}/", home), 1)
+    } else {
+        filename.to_string()
+    }
+}
+
+/// Format a Unix millisecond timestamp to ISO 8601 string.
+fn format_timestamp_ms(timestamp_ms: Option<i64>) -> String {
+    let Some(ms) = timestamp_ms else {
+        return String::new();
+    };
+
+    if ms == 0 {
         return String::new();
     }
 
-    // Convert from Apple's epoch (2001-01-01) to Unix epoch (1970-01-01)
-    // Apple epoch is 978307200 seconds after Unix epoch
-    const COCOA_EPOCH_OFFSET: i64 = 978307200;
-    let unix_timestamp = timestamp / 1_000_000_000 + COCOA_EPOCH_OFFSET;
+    let secs = ms / 1000;
+    let nsecs = ((ms % 1000) * 1_000_000) as u32;
 
-    let datetime = chrono::DateTime::from_timestamp(unix_timestamp, 0)
+    let datetime = chrono::DateTime::from_timestamp(secs, nsecs)
         .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
 
     datetime.format("%Y-%m-%dT%H:%M:%S%z").to_string()
 }
 
-fn parse_date_to_cocoa_nanos(date_str: &str) -> anyhow::Result<i64> {
+/// Parse a date string (YYYY-MM-DD) to Unix milliseconds.
+fn parse_date_to_unix_ms(date_str: &str) -> anyhow::Result<i64> {
     use chrono::NaiveDate;
 
-    // Parse YYYY-MM-DD string to NaiveDate
     let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").context(format!(
         "Invalid date format '{}'. Expected YYYY-MM-DD",
         date_str
     ))?;
 
-    // Convert to midnight UTC
     let datetime = date
         .and_hms_opt(0, 0, 0)
         .ok_or_else(|| anyhow::anyhow!("Failed to create datetime from date"))?;
 
-    // Get Unix timestamp in seconds
-    let unix_timestamp = datetime.and_utc().timestamp();
+    // Convert to Unix milliseconds
+    let unix_ms = datetime.and_utc().timestamp_millis();
 
-    // Convert to Cocoa epoch (subtract offset) and then to nanoseconds
-    const COCOA_EPOCH_OFFSET: i64 = 978307200;
-    let cocoa_nanos = (unix_timestamp - COCOA_EPOCH_OFFSET) * 1_000_000_000;
-
-    Ok(cocoa_nanos)
+    Ok(unix_ms)
 }

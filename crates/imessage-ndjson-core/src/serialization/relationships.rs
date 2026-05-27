@@ -11,7 +11,7 @@ pub struct SerializableRelationships {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_originator_part: Option<String>,
     /// Number of replies to this message
-    pub num_replies: i32,
+    pub num_replies: i64,
     /// Tapbacks/reactions on this message
     pub tapbacks: Vec<SerializableTapback>,
     /// Edit history (if message was edited or unsent)

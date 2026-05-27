@@ -30,7 +30,7 @@ pub enum AttachmentMode {
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::assert_ndjson_valid;
+/// use imessage_ndjson_core::test_utils::assert_ndjson_valid;
 /// use std::path::Path;
 ///
 /// assert_ndjson_valid(Path::new("output/chat_1.ndjson"));
@@ -81,7 +81,7 @@ pub fn assert_ndjson_valid(path: &Path) {
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::assert_message_structure;
+/// use imessage_ndjson_core::test_utils::assert_message_structure;
 /// use serde_json::json;
 ///
 /// let msg = json!({
@@ -169,7 +169,7 @@ pub fn assert_message_structure(msg: &Value) {
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::{assert_attachment_mode, AttachmentMode};
+/// use imessage_ndjson_core::test_utils::{assert_attachment_mode, AttachmentMode};
 /// use serde_json::json;
 ///
 /// let msg = json!({

@@ -7,7 +7,7 @@ use serde::Serialize;
 #[derive(Debug, Serialize, Clone)]
 pub struct SerializableParticipant {
     /// Handle ID from the iMessage database
-    pub handle_id: i32,
+    pub handle_id: i64,
 
     /// Identifier (phone number or email address)
     pub identifier: String,

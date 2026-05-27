@@ -1,0 +1,115 @@
+# Security policy configuration for annotext
+
+# ==============================================================================
+# License Management
+# ==============================================================================
+
+[licenses]
+allow = [
+    # Permissive licenses (OSI approved)
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",      # Boost Software License
+    "ISC",
+    "MIT",
+    "MIT-0",        # MIT No Attribution
+    "MPL-2.0",      # Mozilla Public License (weak copyleft, permissive for linking)
+    "Zlib",
+
+    # Public domain dedications
+    "0BSD",         # Zero-Clause BSD
+    "CC0-1.0",      # Creative Commons Zero
+    "Unlicense",
+
+    # Unicode/text processing
+    "Unicode-3.0",
+
+    # Data licenses
+    "CDLA-Permissive-2.0",
+]
+
+confidence-threshold = 0.8
+unused-allowed-license = "allow"
+
+# Private workspace crates (no published license)
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-app"
+
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-cli"
+
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-core"
+
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-model-runner-candle"
+
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-model-runner-cli"
+
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-model-runner-core"
+
+[[licenses.clarify]]
+expression = "MIT"
+license-files = []
+name = "annotext-protocol"
+
+# ==============================================================================
+# Security Advisories
+# ==============================================================================
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+
+# Accepted advisories.
+#
+# number_prefix 0.4.0 — unmaintained (transitive via indicatif via hf-hub).
+#   No security issue, just lack of maintenance. No alternative available
+#   without replacing hf-hub's progress reporting.
+#
+# paste 1.x — unmaintained (transitive via candle/tokenizers).
+#   Widely used proc macro, no security issue. Cannot be removed without
+#   upstream candle changes.
+ignore = [
+    "RUSTSEC-2025-0119",  # number_prefix unmaintained (transitive via indicatif/hf-hub)
+    "RUSTSEC-2024-0436",  # paste unmaintained (transitive via candle/tokenizers)
+]
+
+# ==============================================================================
+# Banned Dependencies
+# ==============================================================================
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = []
+skip = []
+
+# ==============================================================================
+# Source Control
+# ==============================================================================
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-git = []
+allow-registry = [
+    "https://github.com/rust-lang/crates.io-index",
+]
