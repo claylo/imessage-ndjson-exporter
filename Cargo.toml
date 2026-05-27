@@ -13,6 +13,7 @@ license = "MIT"
 [dependencies]
 imessage-ndjson-core = { path = "crates/imessage-ndjson-core" }
 clap = { version = "4.4", features = ["derive", "cargo"] }
+librebar = { version = "0.1", features = ["cli", "logging", "crash"] }
 anyhow = "1.0"
 chrono = "0.4"
 

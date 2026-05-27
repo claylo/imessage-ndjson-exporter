@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use imessage_ndjson_core::{NdjsonExporter, attachment_manager::CompressionMode};
+use imessage_ndjson_core::{attachment_manager::CompressionMode, NdjsonExporter};
 use std::path::PathBuf;
 
 mod cli;
@@ -9,9 +9,23 @@ use cli::Cli;
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Validate CLI arguments
+    // Validate CLI arguments before consuming common args
     cli.validate()
         .map_err(|e| anyhow::anyhow!("Invalid arguments: {}", e))?;
+
+    // Extract values from common args before moving into librebar
+    let verbose = cli.common.verbose;
+    let quiet = cli.common.quiet;
+
+    // Initialize librebar (logging to ~/Library/Logs/, crash handler).
+    // _app holds logging/crash guards -- must stay alive for duration of main().
+    let _app = librebar::init("imessage-ndjson-exporter")
+        .with_version(env!("CARGO_PKG_VERSION"))
+        .with_cli(cli.common)
+        .logging()
+        .crash_handler()
+        .start()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize: {}", e))?;
 
     // Determine database path
     let db_path = match cli.database_path.as_ref() {
@@ -19,24 +33,27 @@ fn main() -> Result<()> {
         None => detect_database_path()?,
     };
 
-    if cli.verbose {
+    if verbose > 0 {
         println!("Database: {}", db_path.display());
         println!("Output: {}", cli.output_dir.display());
     }
 
-    // Create output directory if it doesn't exist
+    // Create output directory
     std::fs::create_dir_all(&cli.output_dir).context("Failed to create output directory")?;
 
     // Parse compression mode
     let embed_compression = CompressionMode::parse(&cli.embed_compression)
         .ok_or_else(|| anyhow::anyhow!("Invalid compression mode: {}", cli.embed_compression))?;
 
+    // Show progress unless --quiet
+    let show_progress = !quiet;
+
     // Create and run exporter
     let exporter = NdjsonExporter::new(
         &db_path,
         &cli.output_dir,
         cli.custom_name.clone(),
-        !cli.no_progress,
+        show_progress,
         cli.conversation_filter.clone(),
         cli.contacts_path.clone(),
         cli.copy_attachments,
@@ -52,7 +69,9 @@ fn main() -> Result<()> {
 
     exporter.export()?;
 
-    println!("\n✅ Export completed successfully!");
+    if !quiet {
+        println!("\nExport completed successfully!");
+    }
 
     Ok(())
 }

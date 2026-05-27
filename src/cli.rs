@@ -1,10 +1,19 @@
 use clap::Parser;
+use librebar::cli::CommonArgs;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-#[command(name = "imessage-ndjson-exporter")]
+#[command(
+    name = "imessage-ndjson-exporter",
+    about = "Export iMessage data to NDJSON format",
+    version,
+    after_help = "Examples:\n  imessage-ndjson-exporter --output ./export\n  imessage-ndjson-exporter --output ./export --copy-attachments --convert-attachments"
+)]
 pub struct Cli {
+    /// Common flags (--verbose, --quiet, --color, --chdir)
+    #[command(flatten)]
+    pub common: CommonArgs,
+
     /// Path to the iMessage database (chat.db)
     ///
     /// If not specified, will attempt to auto-detect the database location
@@ -91,14 +100,6 @@ pub struct Cli {
     /// Custom name for the database owner (overrides contact resolution)
     #[arg(long = "custom-name")]
     pub custom_name: Option<String>,
-
-    /// Enable debug logging
-    #[arg(short = 'v', long = "verbose")]
-    pub verbose: bool,
-
-    /// Disable progress indicators
-    #[arg(long = "no-progress")]
-    pub no_progress: bool,
 }
 
 impl Cli {
