@@ -600,7 +600,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "imessage-ndjson-exporter"
+name = "imessage-ndjson-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -623,6 +623,16 @@ dependencies = [
  "tempfile",
  "thiserror",
  "zstd",
+]
+
+[[package]]
+name = "imessage-ndjson-exporter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "imessage-ndjson-core",
 ]
 
 [[package]]

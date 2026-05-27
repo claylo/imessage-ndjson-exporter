@@ -97,7 +97,11 @@ mod tests {
         ));
 
         // Codec variants should be detected
-        assert!("audio/x-caf; codecs=opus".to_lowercase().starts_with("audio/x-caf;"));
+        assert!(
+            "audio/x-caf; codecs=opus"
+                .to_lowercase()
+                .starts_with("audio/x-caf;")
+        );
 
         // Other types should not match
         assert!(!matches!(

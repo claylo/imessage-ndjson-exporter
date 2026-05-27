@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::get_test_db_path;
+/// use imessage_ndjson_core::test_utils::get_test_db_path;
 ///
 /// let db_path = get_test_db_path();
 /// assert!(db_path.exists());
@@ -26,7 +26,7 @@ pub fn get_test_db_path() -> PathBuf {
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::load_typedstream_file;
+/// use imessage_ndjson_core::test_utils::load_typedstream_file;
 ///
 /// let data = load_typedstream_file("Mention").unwrap();
 /// assert!(!data.is_empty());
@@ -46,7 +46,7 @@ pub fn load_typedstream_file(name: &str) -> anyhow::Result<Vec<u8>> {
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::load_plist_file;
+/// use imessage_ndjson_core::test_utils::load_plist_file;
 /// use std::path::Path;
 ///
 /// let plist = load_plist_file(Path::new("test_data/app_message/PollCreate.plist")).unwrap();
@@ -64,7 +64,7 @@ pub fn load_plist_file(path: &Path) -> anyhow::Result<plist::Value> {
 ///
 /// # Example
 /// ```no_run
-/// use imessage_ndjson_exporter::test_utils::get_test_sticker;
+/// use imessage_ndjson_core::test_utils::get_test_sticker;
 ///
 /// let sticker_path = get_test_sticker("comic.heic");
 /// assert!(sticker_path.exists());
@@ -93,11 +93,23 @@ fn get_test_data_root() -> PathBuf {
         return test_data_parent;
     }
 
-    // Try from CARGO_MANIFEST_DIR (most reliable)
+    // Try from CARGO_MANIFEST_DIR (most reliable for single-crate projects)
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let test_data_manifest = PathBuf::from(manifest_dir).join("test_data");
+        let manifest_path = PathBuf::from(&manifest_dir);
+        let test_data_manifest = manifest_path.join("test_data");
         if test_data_manifest.exists() {
             return test_data_manifest;
+        }
+
+        // In a workspace, test_data may be at the workspace root.
+        // Walk up from CARGO_MANIFEST_DIR looking for it.
+        let mut ancestor = manifest_path.parent();
+        while let Some(dir) = ancestor {
+            let test_data_ancestor = dir.join("test_data");
+            if test_data_ancestor.exists() {
+                return test_data_ancestor;
+            }
+            ancestor = dir.parent();
         }
     }
 
@@ -118,10 +130,12 @@ mod tests {
     #[test]
     fn test_get_test_sticker() {
         let sticker_path = get_test_sticker("comic.heic");
-        assert!(sticker_path
-            .to_str()
-            .unwrap()
-            .ends_with("test_data/stickers/comic.heic"));
+        assert!(
+            sticker_path
+                .to_str()
+                .unwrap()
+                .ends_with("test_data/stickers/comic.heic")
+        );
     }
 
     #[test]

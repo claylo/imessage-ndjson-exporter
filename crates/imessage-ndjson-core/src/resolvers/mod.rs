@@ -1,5 +1,4 @@
 /// Resolvers for building relationship context (contacts, tapbacks, replies)
-
 pub mod contacts;
 pub mod replies;
 pub mod tapbacks;

@@ -126,14 +126,22 @@ impl Cli {
 
         // Validate start-date format
         if let Some(ref start_date) = self.start_date {
-            NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
-                .map_err(|_| format!("Invalid start-date format. Expected YYYY-MM-DD, got: {}", start_date))?;
+            NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
+                format!(
+                    "Invalid start-date format. Expected YYYY-MM-DD, got: {}",
+                    start_date
+                )
+            })?;
         }
 
         // Validate end-date format
         if let Some(ref end_date) = self.end_date {
-            NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
-                .map_err(|_| format!("Invalid end-date format. Expected YYYY-MM-DD, got: {}", end_date))?;
+            NaiveDate::parse_from_str(end_date, "%Y-%m-%d").map_err(|_| {
+                format!(
+                    "Invalid end-date format. Expected YYYY-MM-DD, got: {}",
+                    end_date
+                )
+            })?;
         }
 
         // Ensure start_date <= end_date if both are provided

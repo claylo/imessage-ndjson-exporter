@@ -1,5 +1,5 @@
-use serde::Serialize;
 use super::attachments::SerializableAttachment;
+use serde::Serialize;
 
 /// Serializable representation of message content
 #[derive(Debug, Serialize, Clone)]
@@ -16,6 +16,7 @@ pub struct SerializableContent {
 
 /// Individual component of message content
 #[derive(Debug, Serialize, Clone)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type")]
 pub enum ContentComponent {
     #[serde(rename = "text")]
@@ -174,7 +175,10 @@ mod tests {
 
         let json = serde_json::to_value(&component).unwrap();
         assert_eq!(json["type"], "app");
-        assert_eq!(json["balloon_bundle_id"], "com.apple.messages.URLBalloonProvider");
+        assert_eq!(
+            json["balloon_bundle_id"],
+            "com.apple.messages.URLBalloonProvider"
+        );
         assert_eq!(json["app_name"], "Link Preview");
         assert_eq!(json["app_type"], "url");
         assert!(json["metadata"].is_object());

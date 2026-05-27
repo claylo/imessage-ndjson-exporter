@@ -19,10 +19,7 @@ use std::path::Path;
 /// let conn = database::open_test_db(&db_path).unwrap();
 /// ```
 pub fn open_test_db(path: &Path) -> anyhow::Result<Connection> {
-    let conn = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     Ok(conn)
 }
 

@@ -1,5 +1,5 @@
-use serde::Serialize;
 use super::chat::SerializableSender;
+use serde::Serialize;
 
 /// Serializable representation of message relationships (tapbacks, replies, edits)
 #[derive(Debug, Serialize, Clone)]
@@ -164,7 +164,10 @@ mod tests {
 
         let json = serde_json::to_value(&relationships).unwrap();
         assert_eq!(json["num_replies"], 0);
-        assert!(json.get("thread_originator_guid").is_none() || json["thread_originator_guid"].is_null());
+        assert!(
+            json.get("thread_originator_guid").is_none()
+                || json["thread_originator_guid"].is_null()
+        );
         assert!(json.get("edit_history").is_none() || json["edit_history"].is_null());
     }
 }

@@ -1,9 +1,9 @@
-use serde::Serialize;
 use super::{
     chat::{SerializableChatContext, SerializableSender},
     content::{ExpressiveEffect, SerializableContent},
     relationships::SerializableRelationships,
 };
+use serde::Serialize;
 
 /// Main serializable message structure
 ///
@@ -74,17 +74,11 @@ pub struct MessageMetadata {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SerializableGroupAction {
     /// New participant was added to the group
-    ParticipantAdded {
-        participant_handle_id: i32,
-    },
+    ParticipantAdded { participant_handle_id: i32 },
     /// Participant was removed from the group
-    ParticipantRemoved {
-        participant_handle_id: i32,
-    },
+    ParticipantRemoved { participant_handle_id: i32 },
     /// Group name was changed
-    NameChange {
-        new_name: String,
-    },
+    NameChange { new_name: String },
     /// Participant left the group
     ParticipantLeft,
     /// Group icon was changed

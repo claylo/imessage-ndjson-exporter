@@ -3,9 +3,9 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use flate2::write::GzEncoder;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use hex;
 use imessage_database::tables::attachment::Attachment;
 use imessage_database::util::platform::Platform;
@@ -27,7 +27,7 @@ pub enum CompressionMode {
 }
 
 impl CompressionMode {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "auto" => Some(CompressionMode::Auto),
             "gzip" => Some(CompressionMode::Gzip),
@@ -153,16 +153,13 @@ impl AttachmentManager {
         chat_id: i32,
     ) -> Result<(String, Option<String>), String> {
         // 1. Resolve attachment path using platform-specific logic
-        let source_path = match attachment.resolved_attachment_path(
-            &self.platform,
-            &self.db_path,
-            None,
-        ) {
-            Some(path) => PathBuf::from(path),
-            None => {
-                return Err("No file path in database".to_string());
-            }
-        };
+        let source_path =
+            match attachment.resolved_attachment_path(&self.platform, &self.db_path, None) {
+                Some(path) => PathBuf::from(path),
+                None => {
+                    return Err("No file path in database".to_string());
+                }
+            };
 
         // 2. Check if file exists
         if !source_path.exists() {
@@ -250,10 +247,7 @@ impl AttachmentManager {
 
         // 9. Determine new MIME type if extension changed
         let new_mime = if extension_changed {
-            let ext = dest_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
+            let ext = dest_path.extension().and_then(|e| e.to_str()).unwrap_or("");
             match ext {
                 "jpeg" => Some("image/jpeg".to_string()),
                 "png" => Some("image/png".to_string()),
@@ -291,16 +285,13 @@ impl AttachmentManager {
         max_size: usize,
     ) -> Result<EmbeddedData, String> {
         // 1. Resolve attachment path
-        let source_path = match attachment.resolved_attachment_path(
-            &self.platform,
-            &self.db_path,
-            None,
-        ) {
-            Some(path) => PathBuf::from(path),
-            None => {
-                return Err("No file path in database".to_string());
-            }
-        };
+        let source_path =
+            match attachment.resolved_attachment_path(&self.platform, &self.db_path, None) {
+                Some(path) => PathBuf::from(path),
+                None => {
+                    return Err("No file path in database".to_string());
+                }
+            };
 
         // 2. Check if file exists
         if !source_path.exists() {
@@ -320,8 +311,8 @@ impl AttachmentManager {
         }
 
         // 4. Read file contents
-        let mut file = File::open(&source_path)
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+        let mut file =
+            File::open(&source_path).map_err(|e| format!("Failed to open file: {}", e))?;
         let mut file_data = Vec::with_capacity(file_size);
         file.read_to_end(&mut file_data)
             .map_err(|e| format!("Failed to read file: {}", e))?;
@@ -404,8 +395,9 @@ impl AttachmentManager {
                     .finish()
                     .map_err(|e| format!("Gzip compression failed: {}", e))
             }
-            CompressionMethod::Zstd => zstd::encode_all(data, 3)
-                .map_err(|e| format!("Zstd compression failed: {}", e)),
+            CompressionMethod::Zstd => {
+                zstd::encode_all(data, 3).map_err(|e| format!("Zstd compression failed: {}", e))
+            }
         }
     }
 
@@ -508,7 +500,11 @@ mod tests {
             PathBuf::new(),
         );
 
-        let abs_path = temp_dir.path().join("attachments").join("chat_1").join("test.jpg");
+        let abs_path = temp_dir
+            .path()
+            .join("attachments")
+            .join("chat_1")
+            .join("test.jpg");
         let relative = manager.make_relative_path(&abs_path);
 
         assert_eq!(relative, "attachments/chat_1/test.jpg");

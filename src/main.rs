@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use imessage_ndjson_exporter::{
-    attachment_manager::CompressionMode, cli::Cli, NdjsonExporter,
-};
+use imessage_ndjson_core::{NdjsonExporter, attachment_manager::CompressionMode};
 use std::path::PathBuf;
+
+mod cli;
+use cli::Cli;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -24,11 +25,10 @@ fn main() -> Result<()> {
     }
 
     // Create output directory if it doesn't exist
-    std::fs::create_dir_all(&cli.output_dir)
-        .context("Failed to create output directory")?;
+    std::fs::create_dir_all(&cli.output_dir).context("Failed to create output directory")?;
 
     // Parse compression mode
-    let embed_compression = CompressionMode::from_str(&cli.embed_compression)
+    let embed_compression = CompressionMode::parse(&cli.embed_compression)
         .ok_or_else(|| anyhow::anyhow!("Invalid compression mode: {}", cli.embed_compression))?;
 
     // Create and run exporter
@@ -65,8 +65,6 @@ fn detect_database_path() -> Result<PathBuf> {
     if default_path.exists() {
         Ok(default_path)
     } else {
-        anyhow::bail!(
-            "Could not auto-detect database location. Please specify with --database"
-        )
+        anyhow::bail!("Could not auto-detect database location. Please specify with --database")
     }
 }

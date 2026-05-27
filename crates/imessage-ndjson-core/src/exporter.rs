@@ -6,8 +6,8 @@ use imessage_database::{
         chat::Chat,
         chat_handle::ChatToHandle,
         handle::Handle,
-        messages::{models::GroupAction, Message},
-        table::{get_connection, Cacheable, Table},
+        messages::{Message, models::GroupAction},
+        table::{Cacheable, Table, get_connection},
     },
     util::{platform::Platform, query_context::QueryContext},
 };
@@ -52,11 +52,12 @@ pub struct NdjsonExporter {
     max_embed_size: usize,
     embed_compression: CompressionMode,
     include_avatars: bool,
-    start_timestamp: Option<i64>,  // Cocoa epoch nanoseconds (inclusive)
-    end_timestamp: Option<i64>,    // Cocoa epoch nanoseconds (exclusive)
+    start_timestamp: Option<i64>, // Cocoa epoch nanoseconds (inclusive)
+    end_timestamp: Option<i64>,   // Cocoa epoch nanoseconds (exclusive)
 }
 
 impl NdjsonExporter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         database_path: &Path,
         output_dir: &Path,
@@ -258,13 +259,13 @@ impl NdjsonExporter {
         };
 
         // Apply conversation filter if specified
-        let selected_chat_ids = if self.conversation_filter.is_some() {
+        let selected_chat_ids = if let Some(ref filter) = self.conversation_filter {
             let chat_ids = self.resolve_filtered_chats(&db, &contacts_index, &handles, &chats)?;
 
             if chat_ids.is_empty() {
                 anyhow::bail!(
                     "Filter '{}' does not match any conversations",
-                    self.conversation_filter.as_ref().unwrap()
+                    filter
                 );
             }
 
@@ -379,6 +380,7 @@ impl NdjsonExporter {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     fn build_caches(
         &self,
         db: &Connection,
@@ -427,6 +429,7 @@ impl NdjsonExporter {
         Ok((chats, handles, tapbacks, chatroom_participants))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn export_chat(
         &self,
         db: &Connection,
@@ -446,8 +449,10 @@ impl NdjsonExporter {
         let mut writer = BufWriter::new(file);
 
         // Get messages for this chat
-        let mut query_context = QueryContext::default();
-        query_context.selected_chat_ids = Some(BTreeSet::from([chat_id]));
+        let _query_context = QueryContext {
+            selected_chat_ids: Some(BTreeSet::from([chat_id])),
+            ..QueryContext::default()
+        };
 
         let mut message_count = 0;
         Message::stream(db, |msg_result| {
@@ -514,6 +519,7 @@ impl NdjsonExporter {
         Ok(message_count)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn convert_message(
         &self,
         db: &Connection,
@@ -817,13 +823,12 @@ impl NdjsonExporter {
                             uti: att.uti.clone(),
                             size_bytes: att.total_bytes,
                             transcription: meta.transcription.clone(),
-                            dimensions: if meta.width.is_some() && meta.height.is_some() {
-                                Some(AttachmentDimensions {
-                                    width: meta.width.unwrap(),
-                                    height: meta.height.unwrap(),
-                                })
-                            } else {
-                                None
+                            dimensions: match (meta.width, meta.height) {
+                                (Some(w), Some(h)) => Some(AttachmentDimensions {
+                                    width: w,
+                                    height: h,
+                                }),
+                                _ => None,
                             },
                             is_sticker: att.is_sticker,
                             sticker_metadata: None,
@@ -966,11 +971,14 @@ fn parse_date_to_cocoa_nanos(date_str: &str) -> anyhow::Result<i64> {
     use chrono::NaiveDate;
 
     // Parse YYYY-MM-DD string to NaiveDate
-    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .context(format!("Invalid date format '{}'. Expected YYYY-MM-DD", date_str))?;
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").context(format!(
+        "Invalid date format '{}'. Expected YYYY-MM-DD",
+        date_str
+    ))?;
 
     // Convert to midnight UTC
-    let datetime = date.and_hms_opt(0, 0, 0)
+    let datetime = date
+        .and_hms_opt(0, 0, 0)
         .ok_or_else(|| anyhow::anyhow!("Failed to create datetime from date"))?;
 
     // Get Unix timestamp in seconds

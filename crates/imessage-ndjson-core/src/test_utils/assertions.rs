@@ -39,11 +39,7 @@ pub fn assert_ndjson_valid(path: &Path) {
     let content = fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("Failed to read NDJSON file {:?}: {}", path, e));
 
-    assert!(
-        !content.is_empty(),
-        "NDJSON file {:?} is empty",
-        path
-    );
+    assert!(!content.is_empty(), "NDJSON file {:?} is empty", path);
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -132,9 +128,7 @@ pub fn assert_message_structure(msg: &Value) {
     );
 
     // Check metadata subfields
-    let metadata = msg
-        .get("metadata")
-        .expect("metadata field exists");
+    let metadata = msg.get("metadata").expect("metadata field exists");
     assert!(
         metadata.get("rowid").is_some(),
         "Metadata missing 'rowid' field"
@@ -159,10 +153,7 @@ pub fn assert_message_structure(msg: &Value) {
         "Content missing 'components' field"
     );
     assert!(
-        content
-            .get("components")
-            .unwrap()
-            .is_array(),
+        content.get("components").unwrap().is_array(),
         "Content 'components' is not an array"
     );
 }

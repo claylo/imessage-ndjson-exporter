@@ -81,7 +81,10 @@ mod tests {
     #[test]
     fn test_heic_detection() {
         // HEIC should be detected (case-insensitive)
-        assert!(matches!("image/heic".to_lowercase().as_str(), "image/heic" | "image/heif"));
+        assert!(matches!(
+            "image/heic".to_lowercase().as_str(),
+            "image/heic" | "image/heif"
+        ));
         assert!(matches!(
             "image/HEIC".to_lowercase().as_str(),
             "image/heic" | "image/heif"

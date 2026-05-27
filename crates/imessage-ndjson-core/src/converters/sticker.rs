@@ -41,7 +41,10 @@ pub fn convert_if_needed(
                 *to = converted_path;
                 return true;
             }
-            eprintln!("Warning: Unable to convert HEICS sticker: {}", from.display());
+            eprintln!(
+                "Warning: Unable to convert HEICS sticker: {}",
+                from.display()
+            );
         }
         return false;
     }
@@ -56,7 +59,10 @@ pub fn convert_if_needed(
                 *to = converted_path;
                 return true;
             }
-            eprintln!("Warning: Unable to convert HEIC sticker: {}", from.display());
+            eprintln!(
+                "Warning: Unable to convert HEIC sticker: {}",
+                from.display()
+            );
         }
         return false;
     }
@@ -198,13 +204,22 @@ mod tests {
 
     #[test]
     fn test_heic_sticker_detection() {
-        assert!(matches!("image/heic".to_lowercase().as_str(), "image/heic" | "image/heif"));
+        assert!(matches!(
+            "image/heic".to_lowercase().as_str(),
+            "image/heic" | "image/heif"
+        ));
     }
 
     #[test]
     fn test_heics_detection() {
-        assert!(matches!("image/heics".to_lowercase().as_str(), "image/heics" | "image/heic-sequence"));
-        assert!(matches!("image/heic-sequence".to_lowercase().as_str(), "image/heics" | "image/heic-sequence"));
+        assert!(matches!(
+            "image/heics".to_lowercase().as_str(),
+            "image/heics" | "image/heic-sequence"
+        ));
+        assert!(matches!(
+            "image/heic-sequence".to_lowercase().as_str(),
+            "image/heics" | "image/heic-sequence"
+        ));
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use imessage_database::tables::messages::Message;
+use std::collections::HashMap;
 
 /// Resolves tapbacks (reactions) for messages
 pub struct TapbackResolver {

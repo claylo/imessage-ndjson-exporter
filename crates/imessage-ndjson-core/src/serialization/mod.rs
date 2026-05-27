@@ -1,5 +1,4 @@
 /// Serialization module for converting imessage-database types to serializable structs
-
 pub mod attachments;
 pub mod chat;
 pub mod content;
