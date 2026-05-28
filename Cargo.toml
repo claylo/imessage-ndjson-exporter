@@ -1,62 +1,6 @@
-[package]
-name = "imessage-ndjson-exporter"
-version = "0.1.0"
-edition = "2021"
-authors = ["Clay"]
-description = "Export iMessage data to NDJSON format (lossless, structured)"
-license = "GPL-3.0-or-later"
-
-[dependencies]
-# Core serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# CLI
-clap = { version = "4.4", features = ["derive", "cargo"] }
-
-# Date/time handling
-chrono = "0.4"
-
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-
-# Progress indicators
-indicatif = "0.17"
-
-# Cryptographic hashing for attachment deduplication
-sha2 = "0.10"
-
-# Hex encoding for hash strings
-hex = "0.4"
-
-# Base64 encoding for embedded attachments
-base64 = "0.22"
-
-# Compression for embedded attachments
-flate2 = "1.0" # Gzip compression
-zstd = "0.13"  # Zstandard compression
-
-# iMessage database library
-imessage-database = "3.2.1"
-
-# Database (same version as imessage-database)
-rusqlite = { version = "=0.37.0", features = ["blob", "bundled"] }
-
-[features]
-test-utils = []
-
-[dev-dependencies]
-tempfile = "3.8"
-assert-json-diff = "2.0"   # JSON comparison for test assertions
-predicates = "3.0"         # Advanced assertions
-assert_fs = "1.1"          # Filesystem assertions
-assert_cmd = "2.0"         # CLI testing
-plist = "1.5"              # Plist parsing for test fixtures
-
-[[bin]]
-name = "imessage-ndjson-exporter"
-path = "src/main.rs"
+[workspace]
+members = ["crates/imessage-ndjson-core", "crates/imessage-ndjson-exporter"]
+resolver = "2"
 
 [profile.release]
 lto = true

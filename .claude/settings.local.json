@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(./target/release/imessage-ndjson-exporter:*)",
+      "Bash(xargs -I {} sh -c 'echo \"\"\"\"===== {} =====\"\"\"\" && head -20 {}')",
+      "Bash(cargo clippy:*)",
+      "Bash(./target/debug/imessage-ndjson-exporter:*)",
+      "Bash(done)",
+      "Bash(sqlite3:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
