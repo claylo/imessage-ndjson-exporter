@@ -139,14 +139,13 @@ impl Database {
             let batch_len = batch.len() as i64;
             for msg in batch {
                 // Tapbacks have associated_message_type set (e.g. "love", "like", etc.)
-                if msg.associated_message_type.is_some() {
-                    if let Some(ref guid) = msg.associated_message_guid {
+                if msg.associated_message_type.is_some()
+                    && let Some(ref guid) = msg.associated_message_guid {
                         tapback_map
                             .entry(guid.clone())
                             .or_default()
                             .push(msg);
                     }
-                }
             }
 
             offset += batch_len;

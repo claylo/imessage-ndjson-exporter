@@ -108,12 +108,11 @@ fn convert_heics(from: &Path, to: &Path, video_converter: &VideoConverter) -> Op
 
     // Directory to store intermediate renders
     let tmp_path = PathBuf::from("/tmp/imessage-ndjson");
-    if !tmp_path.exists() {
-        if let Err(why) = create_dir_all(&tmp_path) {
+    if !tmp_path.exists()
+        && let Err(why) = create_dir_all(&tmp_path) {
             eprintln!("Unable to create {}: {why}", tmp_path.display());
             return None;
         }
-    }
     let tmp = tmp_path.to_str()?;
 
     match video_converter {

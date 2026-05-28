@@ -291,11 +291,10 @@ impl NdjsonExporter {
         let mut total_messages = 0;
         for (chat_id, chat) in &chats {
             // Skip if not in selected set
-            if let Some(ref selected) = selected_chat_ids {
-                if !selected.contains(chat_id) {
+            if let Some(ref selected) = selected_chat_ids
+                && !selected.contains(chat_id) {
                     continue;
                 }
-            }
 
             let message_count = self.export_chat(
                 &db,
@@ -506,8 +505,8 @@ impl NdjsonExporter {
         }
 
         let handle_id = msg.handle_id;
-        if handle_id > 0 {
-            if let Some(handle) = handles.get(&handle_id) {
+        if handle_id > 0
+            && let Some(handle) = handles.get(&handle_id) {
                 let id = handle.id.clone();
                 let name = contact_resolver.resolve_name(&id, false);
                 return SerializableSender {
@@ -516,7 +515,6 @@ impl NdjsonExporter {
                     contact_name: name,
                 };
             }
-        }
 
         SerializableSender {
             handle_id: if handle_id > 0 { Some(handle_id) } else { None },
@@ -562,15 +560,14 @@ impl NdjsonExporter {
         let text = get_message_text(msg);
 
         // Build text component if there's text
-        if let Some(ref text_str) = text {
-            if !text_str.is_empty() {
+        if let Some(ref text_str) = text
+            && !text_str.is_empty() {
                 let attributes = build_text_attributes(msg);
                 components.push(ContentComponent::Text {
                     text: text_str.clone(),
                     attributes,
                 });
             }
-        }
 
         // Handle retracted messages
         if msg.date_retracted.is_some() && text.is_none() && msg.attachments.is_empty() {
@@ -596,7 +593,7 @@ impl NdjsonExporter {
                 content_hash,
             ) = if self.embed_attachments {
                 // Embed mode
-                if let Some(ref mut mgr) = attachment_manager {
+                if let Some(mgr) = attachment_manager.as_mut() {
                     match mgr.embed_attachment_from_path(
                         original_path.as_deref(),
                         att.mime_type.as_deref(),
@@ -618,7 +615,7 @@ impl NdjsonExporter {
                 }
             } else if self.copy_attachments {
                 // Copy mode
-                if let Some(ref mut mgr) = attachment_manager {
+                if let Some(mgr) = attachment_manager.as_mut() {
                     match mgr.copy_attachment_from_path(
                         original_path.as_deref(),
                         att.transfer_name.as_deref(),
@@ -667,8 +664,8 @@ impl NdjsonExporter {
         }
 
         // Handle app messages
-        if let Some(ref bundle_id) = msg.balloon_bundle_id {
-            if !bundle_id.is_empty() {
+        if let Some(ref bundle_id) = msg.balloon_bundle_id
+            && !bundle_id.is_empty() {
                 components.push(ContentComponent::App {
                     balloon_bundle_id: bundle_id.clone(),
                     app_name: None,
@@ -676,7 +673,6 @@ impl NdjsonExporter {
                     metadata: None,
                 });
             }
-        }
 
         Ok(SerializableContent {
             text,
@@ -711,7 +707,7 @@ impl NdjsonExporter {
 
                 // Look up avatar path and copy if available
                 let avatar_path = if let Some(source_path) = avatar_paths.get(&identifier) {
-                    if let Some(ref mut mgr) = avatar_manager {
+                    if let Some(mgr) = avatar_manager.as_mut() {
                         mgr.copy_avatar(source_path)
                     } else {
                         None
@@ -831,22 +827,18 @@ fn build_announcement(msg: &Message) -> Option<SerializableAnnouncement> {
 /// Get message text, trying msg.text first, then decoding attributed_body.
 fn get_message_text(msg: &Message) -> Option<String> {
     // msg.text is already populated by imessage-db
-    if let Some(ref text) = msg.text {
-        if !text.is_empty() {
+    if let Some(ref text) = msg.text
+        && !text.is_empty() {
             return Some(text.clone());
         }
-    }
 
     // Fallback: decode attributed_body blob
-    if let Some(ref body) = msg.attributed_body {
-        if !body.is_empty() {
-            if let Some(text) = imessage_core::typedstream::extract_text(body) {
-                if !text.is_empty() {
+    if let Some(ref body) = msg.attributed_body
+        && !body.is_empty()
+            && let Some(text) = imessage_core::typedstream::extract_text(body)
+                && !text.is_empty() {
                     return Some(text);
                 }
-            }
-        }
-    }
 
     None
 }

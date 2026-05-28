@@ -128,7 +128,7 @@ impl Cli {
         }
 
         // Ensure start_date <= end_date if both are provided
-        if let (Some(ref start_date), Some(ref end_date)) = (&self.start_date, &self.end_date) {
+        if let (Some(start_date), Some(end_date)) = (&self.start_date, &self.end_date) {
             let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
                 .map_err(|_| "Failed to parse start-date".to_string())?;
             let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")

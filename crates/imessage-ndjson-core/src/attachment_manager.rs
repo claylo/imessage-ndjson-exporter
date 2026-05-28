@@ -222,11 +222,10 @@ impl AttachmentManager {
         }
 
         // Fallback to raw copy if conversion didn't happen
-        if !extension_changed {
-            if let Err(e) = fs::copy(&source_path, &dest_path) {
+        if !extension_changed
+            && let Err(e) = fs::copy(&source_path, &dest_path) {
                 return Err(format!("Failed to copy attachment: {}", e));
             }
-        }
 
         // 9. Determine new MIME type if extension changed
         let new_mime = if extension_changed {
@@ -404,18 +403,16 @@ impl AttachmentManager {
         source_path: &Path,
     ) -> String {
         // Try transfer_name first
-        if let Some(name) = transfer_name {
-            if let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
+        if let Some(name) = transfer_name
+            && let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
                 return ext.to_string();
             }
-        }
 
         // Try filename next
-        if let Some(name) = filename {
-            if let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
+        if let Some(name) = filename
+            && let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
                 return ext.to_string();
             }
-        }
 
         // Fall back to source path extension
         if let Some(ext) = source_path.extension().and_then(|e| e.to_str()) {
