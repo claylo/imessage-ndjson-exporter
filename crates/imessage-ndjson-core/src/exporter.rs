@@ -17,12 +17,12 @@ use crate::{
     serialization::{
         attachments::SerializableAttachment,
         chat::{SerializableChatContext, SerializableSender},
-        content::{ContentComponent, SerializableContent, TextAttribute, TextEffect},
+        content::{ContentComponent, ExpressiveEffect, SerializableContent, TextAttribute, TextEffect},
         message::{
             MessageMetadata, SerializableAnnouncement, SerializableGroupAction, SerializableMessage,
         },
         participant::SerializableParticipant,
-        relationships::{SerializableRelationships, SerializableTapback},
+        relationships::{EditHistory, EditVersion, SerializableRelationships, SerializableTapback},
     },
 };
 
@@ -464,7 +464,7 @@ impl NdjsonExporter {
             thread_originator_part: msg.thread_originator_part.clone(),
             num_replies: 0, // imessage-db doesn't track reply counts directly
             tapbacks: resolved_tapbacks,
-            edit_history: None, // TODO: Implement edit history
+            edit_history: resolve_edit_history(msg),
         };
 
         // Build announcement metadata
@@ -477,7 +477,7 @@ impl NdjsonExporter {
             chat_context,
             content,
             relationships,
-            expressive_effect: None, // TODO: Implement expressive effects
+            expressive_effect: resolve_expressive_effect(msg.expressive_send_style_id.as_deref()),
             announcement,
         })
     }
@@ -1015,7 +1015,127 @@ fn format_timestamp_ms(timestamp_ms: Option<i64>) -> String {
     datetime.format("%Y-%m-%dT%H:%M:%S%z").to_string()
 }
 
+/// Resolve edit history from the `message_summary_info` plist blob.
+///
+/// The blob is a binary plist with:
+/// - `rp`: array of retracted part indices
+/// - `ec`: dict of part index → array of `{d: timestamp_secs, t: typedstream_blob}`
+fn resolve_edit_history(msg: &Message) -> Option<EditHistory> {
+    // Only edited or unsent messages have edit history
+    if msg.date_edited.is_none() && msg.date_retracted.is_none() {
+        return None;
+    }
+
+    let blob = msg.message_summary_info.as_ref()?;
+    let plist = plist::Value::from_reader(std::io::Cursor::new(blob)).ok()?;
+    let root = plist.as_dictionary()?;
+
+    // Check if this is an unsent message (has retracted parts)
+    let is_unsent = root.contains_key("rp");
+
+    // Extract edit events from the "ec" dictionary
+    let mut versions = Vec::new();
+    if let Some(ec_val) = root.get("ec")
+        && let Some(ec_dict) = ec_val.as_dictionary()
+    {
+        // Each key is a part index, value is an array of edit events
+        for (_part_idx, events_val) in ec_dict {
+            if let Some(events) = events_val.as_array() {
+                for event in events {
+                    if let Some(event_dict) = event.as_dictionary() {
+                        // "d" = timestamp in seconds since Apple epoch (2001-01-01)
+                        let timestamp = event_dict
+                            .get("d")
+                            .and_then(|v| v.as_signed_integer())
+                            .map(|secs| {
+                                let unix_ms = (secs + 978_307_200) * 1000;
+                                format_timestamp_ms(Some(unix_ms))
+                            })
+                            .unwrap_or_default();
+
+                        // "t" = typedstream blob containing the edited text
+                        let text = event_dict
+                            .get("t")
+                            .and_then(|v| v.as_data())
+                            .and_then(imessage_core::typedstream::extract_text)
+                            .unwrap_or_default();
+
+                        versions.push(EditVersion {
+                            text,
+                            timestamp,
+                            components: vec![],
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let status = if is_unsent {
+        "unsent".to_string()
+    } else {
+        "edited".to_string()
+    };
+
+    Some(EditHistory {
+        status,
+        versions: if versions.is_empty() {
+            None
+        } else {
+            Some(versions)
+        },
+    })
+}
+
 /// Parse a date string (YYYY-MM-DD) to Unix milliseconds.
+/// Map `expressive_send_style_id` to a structured expressive effect.
+fn resolve_expressive_effect(style_id: Option<&str>) -> Option<ExpressiveEffect> {
+    let id = style_id?;
+    // Bubble effects: com.apple.MobileSMS.expressivesend.*
+    if let Some(suffix) = id.strip_prefix("com.apple.MobileSMS.expressivesend.") {
+        let effect = match suffix {
+            "gentle" => "gentle",
+            "impact" => "slam",
+            "loud" => "loud",
+            "invisibleink" => "invisible_ink",
+            other => other,
+        };
+        return Some(ExpressiveEffect::Bubble {
+            effect: effect.to_string(),
+        });
+    }
+    // Screen effects: com.apple.messages.effect.CK*Effect
+    if let Some(suffix) = id.strip_prefix("com.apple.messages.effect.CK") {
+        let effect = match suffix {
+            "SpotlightEffect" => "spotlight",
+            "HeartEffect" => "hearts",
+            "HappyBirthdayEffect" => "balloons",
+            "ConfettiEffect" => "confetti",
+            "FireworksEffect" => "fireworks",
+            "LaserEffect" => "lasers",
+            "ShootingStarEffect" => "shooting_star",
+            "SparklesEffect" => "sparkles",
+            "EchoEffect" => "echo",
+            other => {
+                // Strip trailing "Effect" if present
+                return Some(ExpressiveEffect::Screen {
+                    effect: other
+                        .strip_suffix("Effect")
+                        .unwrap_or(other)
+                        .to_lowercase(),
+                });
+            }
+        };
+        return Some(ExpressiveEffect::Screen {
+            effect: effect.to_string(),
+        });
+    }
+    // Unknown style — still capture it
+    Some(ExpressiveEffect::Bubble {
+        effect: id.to_string(),
+    })
+}
+
 fn parse_date_to_unix_ms(date_str: &str) -> anyhow::Result<i64> {
     use chrono::NaiveDate;
 
