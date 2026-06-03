@@ -1,0 +1,718 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/claylo/imessage-ndjson-exporter/docs/imessage-export-schema.json",
+  "title": "iMessage NDJSON Export",
+  "description": "Schema for iMessage conversation exports produced by imessage-ndjson-exporter. Each line of an NDJSON export file contains one SerializableMessage object. Participant files contain one SerializableParticipant object per line.",
+  "oneOf": [
+    { "$ref": "#/$defs/SerializableMessage" },
+    { "$ref": "#/$defs/SerializableParticipant" }
+  ],
+  "$defs": {
+    "SerializableMessage": {
+      "type": "object",
+      "description": "A single iMessage message with full metadata, content, and relationships.",
+      "required": ["message_type", "metadata", "sender", "chat_context", "content", "relationships"],
+      "additionalProperties": false,
+      "properties": {
+        "message_type": {
+          "type": "string",
+          "description": "The type of message (e.g., 'iMessage', 'SMS')."
+        },
+        "metadata": { "$ref": "#/$defs/MessageMetadata" },
+        "sender": { "$ref": "#/$defs/SerializableSender" },
+        "chat_context": { "$ref": "#/$defs/SerializableChatContext" },
+        "content": { "$ref": "#/$defs/SerializableContent" },
+        "relationships": { "$ref": "#/$defs/SerializableRelationships" },
+        "expressive_effect": { "$ref": "#/$defs/ExpressiveEffect" },
+        "announcement": { "$ref": "#/$defs/SerializableAnnouncement" }
+      }
+    },
+    "MessageMetadata": {
+      "type": "object",
+      "description": "Core metadata for a message including timestamps and delivery status.",
+      "required": ["rowid", "guid", "date", "service", "is_from_me", "is_read", "is_deleted"],
+      "additionalProperties": false,
+      "properties": {
+        "rowid": {
+          "type": "integer",
+          "description": "Database row ID of the message."
+        },
+        "guid": {
+          "type": "string",
+          "description": "Globally unique identifier for the message."
+        },
+        "date": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of when the message was sent."
+        },
+        "date_read": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of when the message was read."
+        },
+        "date_delivered": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of when the message was delivered."
+        },
+        "date_edited": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of the most recent edit."
+        },
+        "service": {
+          "type": "string",
+          "description": "The messaging service (e.g., 'iMessage', 'SMS')."
+        },
+        "is_from_me": {
+          "type": "boolean",
+          "description": "Whether the message was sent by the database owner."
+        },
+        "is_read": {
+          "type": "boolean",
+          "description": "Whether the message has been read."
+        },
+        "chat_id": {
+          "type": "integer",
+          "description": "The chat ID this message belongs to."
+        },
+        "is_deleted": {
+          "type": "boolean",
+          "description": "Whether the message has been deleted."
+        }
+      }
+    },
+    "SerializableSender": {
+      "type": "object",
+      "description": "Information about a message sender or tapback author.",
+      "required": ["identifier"],
+      "additionalProperties": false,
+      "properties": {
+        "handle_id": {
+          "type": ["integer", "null"],
+          "description": "Database handle ID of the sender. Null for the database owner in some contexts."
+        },
+        "identifier": {
+          "type": "string",
+          "description": "Phone number or email address of the sender."
+        },
+        "contact_name": {
+          "type": "string",
+          "description": "Resolved contact name from the address book."
+        }
+      }
+    },
+    "SerializableChatContext": {
+      "type": "object",
+      "description": "Context about the conversation this message belongs to.",
+      "required": ["chat_identifier", "service_name", "participants"],
+      "additionalProperties": false,
+      "properties": {
+        "chat_id": {
+          "type": ["integer", "null"],
+          "description": "Database chat ID."
+        },
+        "chat_identifier": {
+          "type": "string",
+          "description": "The chat identifier string (phone number, email, or group chat ID)."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Display name of the conversation (typically set for group chats)."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The messaging service name."
+        },
+        "participants": {
+          "type": "array",
+          "description": "List of participant identifiers in this conversation.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "SerializableContent": {
+      "type": "object",
+      "description": "The content of a message including text, subject, and structured components.",
+      "required": ["components"],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Plain text content of the message."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Subject line of the message, if present."
+        },
+        "components": {
+          "type": "array",
+          "description": "Structured content components (text blocks, attachments, apps, retracted content).",
+          "items": { "$ref": "#/$defs/ContentComponent" }
+        }
+      }
+    },
+    "ContentComponent": {
+      "description": "A single content component within a message. Discriminated by the 'type' field.",
+      "oneOf": [
+        { "$ref": "#/$defs/ContentComponent_Text" },
+        { "$ref": "#/$defs/ContentComponent_Attachment" },
+        { "$ref": "#/$defs/ContentComponent_App" },
+        { "$ref": "#/$defs/ContentComponent_Retracted" }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "ContentComponent_Text": {
+      "type": "object",
+      "description": "A text content component with optional rich text attributes.",
+      "required": ["type", "text", "attributes"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "text" },
+        "text": {
+          "type": "string",
+          "description": "The text content."
+        },
+        "attributes": {
+          "type": "array",
+          "description": "Rich text attributes (mentions, links, styles) applied to ranges of the text.",
+          "items": { "$ref": "#/$defs/TextAttribute" }
+        }
+      }
+    },
+    "ContentComponent_Attachment": {
+      "type": "object",
+      "description": "An attachment content component.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "attachment" },
+        "guid": {
+          "type": ["string", "null"],
+          "description": "Unique identifier for the attachment."
+        },
+        "filename": {
+          "type": ["string", "null"],
+          "description": "Original filename of the attachment."
+        },
+        "transfer_name": {
+          "type": ["string", "null"],
+          "description": "Transfer name used during iMessage delivery."
+        },
+        "mime_type": {
+          "type": ["string", "null"],
+          "description": "MIME type of the attachment (e.g., 'image/jpeg', 'video/mp4')."
+        },
+        "uti": {
+          "type": ["string", "null"],
+          "description": "Uniform Type Identifier (Apple's type system)."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "description": "File size in bytes."
+        },
+        "transcription": {
+          "type": ["string", "null"],
+          "description": "Audio transcription text, if available."
+        },
+        "dimensions": { "$ref": "#/$defs/AttachmentDimensions" },
+        "is_sticker": {
+          "type": "boolean",
+          "description": "Whether this attachment is a sticker."
+        },
+        "sticker_metadata": { "$ref": "#/$defs/StickerMetadata" },
+        "original_path": {
+          "type": "string",
+          "description": "Absolute path to the original attachment file on disk."
+        },
+        "copied_path": {
+          "type": "string",
+          "description": "Relative path to the copied attachment file (when using --copy-attachments)."
+        },
+        "copy_error": {
+          "type": "string",
+          "description": "Error message if the attachment copy failed."
+        },
+        "embedded_data": {
+          "type": "string",
+          "description": "Base64-encoded attachment data (when using --embed-attachments)."
+        },
+        "embedded_encoding": {
+          "type": "string",
+          "description": "Encoding used for embedded data (e.g., 'base64')."
+        },
+        "embedded_compression": {
+          "type": "string",
+          "description": "Compression applied to embedded data (e.g., 'gzip', 'zstd', 'none')."
+        },
+        "content_hash": {
+          "type": "string",
+          "description": "SHA256 hash of the attachment content for deduplication."
+        }
+      }
+    },
+    "ContentComponent_App": {
+      "type": "object",
+      "description": "An app message component (iMessage apps, Apple Pay, shared links, etc.).",
+      "required": ["type", "balloon_bundle_id", "app_type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "app" },
+        "balloon_bundle_id": {
+          "type": "string",
+          "description": "Bundle identifier for the iMessage app extension."
+        },
+        "app_name": {
+          "type": ["string", "null"],
+          "description": "Human-readable name of the app."
+        },
+        "app_type": {
+          "type": "string",
+          "description": "The type of app message."
+        },
+        "metadata": {
+          "description": "App-specific metadata. Structure varies by app type.",
+          "type": ["object", "null"]
+        }
+      }
+    },
+    "ContentComponent_Retracted": {
+      "type": "object",
+      "description": "A retracted (unsent) content component.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "retracted" }
+      }
+    },
+    "TextAttribute": {
+      "type": "object",
+      "description": "A rich text attribute applied to a character range within a text component.",
+      "required": ["start", "end", "effects"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start character index (inclusive)."
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End character index (exclusive)."
+        },
+        "effects": {
+          "type": "array",
+          "description": "Effects applied to this text range.",
+          "items": { "$ref": "#/$defs/TextEffect" }
+        }
+      }
+    },
+    "TextEffect": {
+      "description": "A text effect applied to a range. Discriminated by the 'type' field.",
+      "oneOf": [
+        { "$ref": "#/$defs/TextEffect_Mention" },
+        { "$ref": "#/$defs/TextEffect_Link" },
+        { "$ref": "#/$defs/TextEffect_OTP" },
+        { "$ref": "#/$defs/TextEffect_Conversion" },
+        { "$ref": "#/$defs/TextEffect_Style" },
+        { "$ref": "#/$defs/TextEffect_Animated" },
+        { "$ref": "#/$defs/TextEffect_Default" }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "TextEffect_Mention": {
+      "type": "object",
+      "description": "An @mention of a contact.",
+      "required": ["type", "identifier"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "mention" },
+        "identifier": {
+          "type": "string",
+          "description": "The identifier (phone/email) of the mentioned contact."
+        }
+      }
+    },
+    "TextEffect_Link": {
+      "type": "object",
+      "description": "A hyperlink.",
+      "required": ["type", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "link" },
+        "url": {
+          "type": "string",
+          "description": "The URL of the link."
+        }
+      }
+    },
+    "TextEffect_OTP": {
+      "type": "object",
+      "description": "A one-time password / verification code.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "otp" }
+      }
+    },
+    "TextEffect_Conversion": {
+      "type": "object",
+      "description": "A unit conversion annotation.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "conversion" }
+      }
+    },
+    "TextEffect_Style": {
+      "type": "object",
+      "description": "A text formatting style (bold, italic, underline, strikethrough).",
+      "required": ["type", "style"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "style" },
+        "style": {
+          "type": "string",
+          "description": "The style name (e.g., 'bold', 'italic', 'underline', 'strikethrough')."
+        }
+      }
+    },
+    "TextEffect_Animated": {
+      "type": "object",
+      "description": "An animated text effect.",
+      "required": ["type", "animation"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "animated" },
+        "animation": {
+          "type": "string",
+          "description": "The animation effect name."
+        }
+      }
+    },
+    "TextEffect_Default": {
+      "type": "object",
+      "description": "Default text effect (no special formatting).",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "default" }
+      }
+    },
+    "ExpressiveEffect": {
+      "description": "An expressive send effect applied to the message. Discriminated by the 'type' field.",
+      "oneOf": [
+        { "$ref": "#/$defs/ExpressiveEffect_Screen" },
+        { "$ref": "#/$defs/ExpressiveEffect_Bubble" }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "ExpressiveEffect_Screen": {
+      "type": "object",
+      "description": "A full-screen send effect (e.g., balloons, confetti, fireworks).",
+      "required": ["type", "effect"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "screen" },
+        "effect": {
+          "type": "string",
+          "description": "The screen effect name."
+        }
+      }
+    },
+    "ExpressiveEffect_Bubble": {
+      "type": "object",
+      "description": "A bubble send effect (e.g., slam, loud, gentle, invisible ink).",
+      "required": ["type", "effect"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "bubble" },
+        "effect": {
+          "type": "string",
+          "description": "The bubble effect name."
+        }
+      }
+    },
+    "SerializableAnnouncement": {
+      "description": "An announcement or system event message. Discriminated by the 'type' field.",
+      "oneOf": [
+        { "$ref": "#/$defs/Announcement_FullyUnsent" },
+        { "$ref": "#/$defs/Announcement_GroupAction" },
+        { "$ref": "#/$defs/Announcement_AudioMessageKept" }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "Announcement_FullyUnsent": {
+      "type": "object",
+      "description": "The message was fully unsent by the sender.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "fully_unsent" }
+      }
+    },
+    "Announcement_GroupAction": {
+      "description": "A group chat action. Discriminated by the 'type' field.",
+      "oneOf": [
+        { "$ref": "#/$defs/GroupAction_ParticipantAdded" },
+        { "$ref": "#/$defs/GroupAction_ParticipantRemoved" },
+        { "$ref": "#/$defs/GroupAction_NameChange" },
+        { "$ref": "#/$defs/GroupAction_ParticipantLeft" },
+        { "$ref": "#/$defs/GroupAction_GroupIconChanged" },
+        { "$ref": "#/$defs/GroupAction_GroupIconRemoved" },
+        { "$ref": "#/$defs/GroupAction_ChatBackgroundChanged" },
+        { "$ref": "#/$defs/GroupAction_ChatBackgroundRemoved" }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "GroupAction_ParticipantAdded": {
+      "type": "object",
+      "description": "A participant was added to the group chat.",
+      "required": ["type", "participant_handle_id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "participant_added" },
+        "participant_handle_id": {
+          "type": "integer",
+          "description": "Handle ID of the added participant."
+        }
+      }
+    },
+    "GroupAction_ParticipantRemoved": {
+      "type": "object",
+      "description": "A participant was removed from the group chat.",
+      "required": ["type", "participant_handle_id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "participant_removed" },
+        "participant_handle_id": {
+          "type": "integer",
+          "description": "Handle ID of the removed participant."
+        }
+      }
+    },
+    "GroupAction_NameChange": {
+      "type": "object",
+      "description": "The group chat name was changed.",
+      "required": ["type", "new_name"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "name_change" },
+        "new_name": {
+          "type": "string",
+          "description": "The new group chat name."
+        }
+      }
+    },
+    "GroupAction_ParticipantLeft": {
+      "type": "object",
+      "description": "A participant left the group chat.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "participant_left" }
+      }
+    },
+    "GroupAction_GroupIconChanged": {
+      "type": "object",
+      "description": "The group chat icon was changed.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "group_icon_changed" }
+      }
+    },
+    "GroupAction_GroupIconRemoved": {
+      "type": "object",
+      "description": "The group chat icon was removed.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "group_icon_removed" }
+      }
+    },
+    "GroupAction_ChatBackgroundChanged": {
+      "type": "object",
+      "description": "The chat background was changed.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "chat_background_changed" }
+      }
+    },
+    "GroupAction_ChatBackgroundRemoved": {
+      "type": "object",
+      "description": "The chat background was removed.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "chat_background_removed" }
+      }
+    },
+    "AttachmentDimensions": {
+      "type": "object",
+      "description": "Pixel dimensions of an image or video attachment.",
+      "required": ["width", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "type": "number",
+          "description": "Width in pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "Height in pixels."
+        }
+      }
+    },
+    "StickerMetadata": {
+      "type": "object",
+      "description": "Metadata for sticker attachments.",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Source of the sticker (e.g., 'sticker_pack', 'genmoji')."
+        },
+        "genmoji_prompt": {
+          "type": "string",
+          "description": "The prompt used to generate a Genmoji sticker."
+        },
+        "effect": {
+          "type": "string",
+          "description": "Visual effect applied to the sticker."
+        }
+      }
+    },
+    "SerializableRelationships": {
+      "type": "object",
+      "description": "Relationships to other messages (replies, tapbacks, edits).",
+      "required": ["num_replies", "tapbacks"],
+      "additionalProperties": false,
+      "properties": {
+        "thread_originator_guid": {
+          "type": "string",
+          "description": "GUID of the message this is a reply to."
+        },
+        "thread_originator_part": {
+          "type": "string",
+          "description": "Part index of the message this is a reply to."
+        },
+        "num_replies": {
+          "type": "integer",
+          "description": "Number of replies to this message."
+        },
+        "tapbacks": {
+          "type": "array",
+          "description": "Reactions (tapbacks) on this message.",
+          "items": { "$ref": "#/$defs/SerializableTapback" }
+        },
+        "edit_history": { "$ref": "#/$defs/EditHistory" }
+      }
+    },
+    "SerializableTapback": {
+      "type": "object",
+      "description": "A reaction (tapback) on a message.",
+      "required": ["tapback_type", "added_by", "timestamp", "message_part_index", "is_from_me"],
+      "additionalProperties": false,
+      "properties": {
+        "tapback_type": {
+          "type": "string",
+          "description": "The type of tapback (e.g., 'heart', 'like', 'dislike', 'laugh', 'emphasis', 'question')."
+        },
+        "emoji": {
+          "type": "string",
+          "description": "Custom emoji used for the tapback (iOS 17+ sticker tapbacks)."
+        },
+        "added_by": {
+          "$ref": "#/$defs/SerializableSender",
+          "description": "The sender who added this tapback."
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of when the tapback was added."
+        },
+        "message_part_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index of the message component this tapback is on."
+        },
+        "is_from_me": {
+          "type": "boolean",
+          "description": "Whether this tapback was added by the database owner."
+        }
+      }
+    },
+    "EditHistory": {
+      "type": "object",
+      "description": "Edit history for a message.",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "Edit status (e.g., 'edited', 'unsent')."
+        },
+        "versions": {
+          "type": "array",
+          "description": "Previous versions of the message text.",
+          "items": { "$ref": "#/$defs/EditVersion" }
+        }
+      }
+    },
+    "EditVersion": {
+      "type": "object",
+      "description": "A previous version of an edited message.",
+      "required": ["text", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text content of this version."
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 timestamp of when this version was created."
+        },
+        "components": {
+          "type": "array",
+          "description": "Component identifiers for this version.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "SerializableParticipant": {
+      "type": "object",
+      "description": "A conversation participant, written to chat_XX_participants.ndjson files.",
+      "required": ["handle_id", "identifier"],
+      "additionalProperties": false,
+      "properties": {
+        "handle_id": {
+          "type": "integer",
+          "description": "Database handle ID of the participant."
+        },
+        "identifier": {
+          "type": "string",
+          "description": "Phone number or email address of the participant."
+        },
+        "contact_name": {
+          "type": "string",
+          "description": "Resolved contact name from the address book."
+        },
+        "avatar_path": {
+          "type": "string",
+          "description": "Relative path to the participant's avatar image (when using --include-avatars)."
+        }
+      }
+    }
+  }
+}
