@@ -2,7 +2,7 @@
 //! providing the query patterns the exporter needs.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use imessage_db::imessage::entities::{Chat, Handle, Message};
@@ -14,6 +14,7 @@ use imessage_db::imessage::types::{
 /// Database wrapper providing high-level query methods for the exporter.
 pub struct Database {
     repo: MessageRepository,
+    path: PathBuf,
 }
 
 impl Database {
@@ -21,7 +22,10 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let repo = MessageRepository::open(path.to_path_buf())
             .context("Failed to open iMessage database")?;
-        Ok(Self { repo })
+        Ok(Self {
+            repo,
+            path: path.to_path_buf(),
+        })
     }
 
     /// Load all chats into a HashMap keyed by rowid.
@@ -138,9 +142,11 @@ impl Database {
 
             let batch_len = batch.len() as i64;
             for msg in batch {
-                // Tapbacks have associated_message_type set to a reaction name
-                // (None means type 0 = normal message, not a tapback)
-                if msg.associated_message_type.is_some()
+                // Only include actual tapback types (love, like, etc.)
+                // Types 2/3 are normal/app messages that happen to have
+                // associated_message_type set, not tapbacks.
+                if let Some(ref reaction) = msg.associated_message_type
+                    && crate::exporter::is_tapback_type(reaction)
                     && let Some(clean_guid) = msg
                         .associated_message_guid
                         .as_deref()
@@ -160,6 +166,32 @@ impl Database {
         }
 
         Ok(tapback_map)
+    }
+
+    /// Count replies per message GUID via a single GROUP BY query.
+    pub fn load_reply_counts(&self) -> Result<HashMap<String, i64>> {
+        use rusqlite::Connection;
+
+        let conn =
+            Connection::open_with_flags(&self.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .context("Failed to open DB for reply counts")?;
+
+        let mut stmt = conn.prepare(
+            "SELECT thread_originator_guid, COUNT(*) \
+             FROM message \
+             WHERE thread_originator_guid IS NOT NULL \
+             GROUP BY thread_originator_guid",
+        )?;
+
+        let mut counts = HashMap::new();
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let guid: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            counts.insert(guid, count);
+        }
+
+        Ok(counts)
     }
 
     /// Get participants for a specific chat by querying the chat with participants loaded.
