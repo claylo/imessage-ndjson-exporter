@@ -83,12 +83,11 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 #   No security issue, just lack of maintenance. No alternative available
 #   without replacing hf-hub's progress reporting.
 #
-# paste 1.x — unmaintained (transitive via candle/tokenizers).
-#   Widely used proc macro, no security issue. Cannot be removed without
-#   upstream candle changes.
+# atomic-polyfill — unmaintained (transitive via phonenumber → postcard → heapless).
+#   No safe upgrade available. No security issue, just archived.
 ignore = [
     "RUSTSEC-2025-0119",  # number_prefix unmaintained (transitive via indicatif/hf-hub)
-    "RUSTSEC-2024-0436",  # paste unmaintained (transitive via candle/tokenizers)
+    "RUSTSEC-2023-0089",  # atomic-polyfill unmaintained (transitive via phonenumber)
 ]
 
 # ==============================================================================

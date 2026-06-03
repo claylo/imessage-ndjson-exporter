@@ -13,11 +13,13 @@ use crate::{
     avatar_manager::AvatarManager,
     contacts::ContactsIndex,
     db::Database,
-    resolvers::{ContactResolver, TapbackResolver},
+    resolvers::{ContactResolver, ReplyResolver, TapbackResolver},
     serialization::{
         attachments::SerializableAttachment,
         chat::{SerializableChatContext, SerializableSender},
-        content::{ContentComponent, ExpressiveEffect, SerializableContent, TextAttribute, TextEffect},
+        content::{
+            ContentComponent, ExpressiveEffect, SerializableContent, TextAttribute, TextEffect,
+        },
         message::{
             MessageMetadata, SerializableAnnouncement, SerializableGroupAction, SerializableMessage,
         },
@@ -199,7 +201,7 @@ impl NdjsonExporter {
             println!("Building caches...");
         }
 
-        let (chats, handles, tapbacks, chatroom_participants) = self.build_caches(&db)?;
+        let (chats, handles, tapbacks, replies, chatroom_participants) = self.build_caches(&db)?;
 
         // Build ContactsIndex if filter is specified
         let contacts_index = if self.conversation_filter.is_some() {
@@ -235,7 +237,7 @@ impl NdjsonExporter {
         // Query avatar paths before moving contacts_index into ContactResolver
         let avatar_paths = if self.include_avatars {
             contacts_index
-                .get_avatar_paths(self.contacts_path.as_deref(), None)
+                .get_avatar_paths(self.contacts_path.as_deref())
                 .unwrap_or_else(|_| HashMap::new())
         } else {
             HashMap::new()
@@ -297,6 +299,7 @@ impl NdjsonExporter {
                 chat,
                 &handles,
                 &tapbacks,
+                &replies,
                 &mut contact_resolver,
                 &mut attachment_manager,
             )?;
@@ -340,6 +343,7 @@ impl NdjsonExporter {
         HashMap<i64, Chat>,
         HashMap<i64, Handle>,
         TapbackResolver,
+        ReplyResolver,
         HashMap<i64, BTreeSet<i64>>,
     )> {
         // Build chat cache
@@ -357,10 +361,14 @@ impl NdjsonExporter {
             }
         }
 
+        // Build reply count cache
+        let reply_counts = db.load_reply_counts()?;
+        let replies = ReplyResolver::new(reply_counts);
+
         // Build chatroom participants from loaded chats
         let chatroom_participants = db.build_chatroom_participants(&chats);
 
-        Ok((chats, handles, tapbacks, chatroom_participants))
+        Ok((chats, handles, tapbacks, replies, chatroom_participants))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -371,6 +379,7 @@ impl NdjsonExporter {
         chat: &Chat,
         handles: &HashMap<i64, Handle>,
         tapbacks: &TapbackResolver,
+        replies: &ReplyResolver,
         contact_resolver: &mut ContactResolver,
         attachment_manager: &mut Option<AttachmentManager>,
     ) -> Result<usize> {
@@ -395,6 +404,7 @@ impl NdjsonExporter {
                 chat,
                 handles,
                 tapbacks,
+                replies,
                 contact_resolver,
                 attachment_manager,
             )?;
@@ -426,6 +436,7 @@ impl NdjsonExporter {
         chat: &Chat,
         handles: &HashMap<i64, Handle>,
         tapbacks: &TapbackResolver,
+        replies: &ReplyResolver,
         contact_resolver: &mut ContactResolver,
         attachment_manager: &mut Option<AttachmentManager>,
     ) -> Result<SerializableMessage> {
@@ -456,13 +467,13 @@ impl NdjsonExporter {
         // Build content
         let content = self.build_content(msg, chat_id, attachment_manager)?;
 
-        // Build relationships — resolve tapbacks from cache
+        // Build relationships — resolve tapbacks and reply count from caches
         let resolved_tapbacks =
             self.resolve_tapbacks(&msg.guid, tapbacks, handles, contact_resolver);
         let relationships = SerializableRelationships {
             thread_originator_guid: msg.thread_originator_guid.clone(),
             thread_originator_part: msg.thread_originator_part.clone(),
-            num_replies: 0, // imessage-db doesn't track reply counts directly
+            num_replies: replies.get_reply_count(&msg.guid),
             tapbacks: resolved_tapbacks,
             edit_history: resolve_edit_history(msg),
         };
@@ -816,8 +827,13 @@ impl NdjsonExporter {
 
 /// Determine message type from message fields.
 fn determine_message_type(msg: &Message) -> String {
-    // Tapback: has associated_message_type set
-    if msg.associated_message_type.is_some() {
+    // Tapback: associated_message_type is a known reaction string.
+    // The imessage-db crate maps raw DB integers to strings: "love", "like", "-love", etc.
+    // Types 0/2/3 are normal/app messages (0 → None, 2/3 → Some("2")/Some("3")),
+    // so we must check for actual reaction names, not just is_some().
+    if let Some(ref reaction) = msg.associated_message_type
+        && is_tapback_type(reaction)
+    {
         return "tapback".to_string();
     }
 
@@ -832,6 +848,37 @@ fn determine_message_type(msg: &Message) -> String {
     }
 
     "normal".to_string()
+}
+
+/// Check if an associated_message_type string represents a tapback/reaction.
+///
+/// The imessage-db crate's `reaction_type_from_db` maps:
+/// - 0 → None (normal)
+/// - 1000 → "sticker", 2000-2007 → "love"/"like"/etc, 3000-3007 → "-love"/"-like"/etc
+/// - Any other int → its string repr (e.g., 2 → "2", 3 → "3")
+///
+/// Only named reactions are actual tapbacks.
+pub(crate) fn is_tapback_type(reaction: &str) -> bool {
+    matches!(
+        reaction,
+        "sticker"
+            | "love"
+            | "like"
+            | "dislike"
+            | "laugh"
+            | "emphasize"
+            | "question"
+            | "emoji"
+            | "sticker-tapback"
+            | "-love"
+            | "-like"
+            | "-dislike"
+            | "-laugh"
+            | "-emphasize"
+            | "-question"
+            | "-emoji"
+            | "-sticker-tapback"
+    )
 }
 
 /// Build announcement from message fields.
@@ -1119,10 +1166,7 @@ fn resolve_expressive_effect(style_id: Option<&str>) -> Option<ExpressiveEffect>
             other => {
                 // Strip trailing "Effect" if present
                 return Some(ExpressiveEffect::Screen {
-                    effect: other
-                        .strip_suffix("Effect")
-                        .unwrap_or(other)
-                        .to_lowercase(),
+                    effect: other.strip_suffix("Effect").unwrap_or(other).to_lowercase(),
                 });
             }
         };

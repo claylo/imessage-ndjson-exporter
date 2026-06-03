@@ -285,7 +285,6 @@ impl ContactsIndex {
     pub fn get_avatar_paths(
         &self,
         path: Option<&Path>,
-        _sources_dir: Option<&Path>,
     ) -> anyhow::Result<HashMap<String, PathBuf>> {
         let mut avatar_map = HashMap::new();
 
