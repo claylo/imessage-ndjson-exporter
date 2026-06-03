@@ -207,11 +207,10 @@ Each `.ndjson` file contains one JSON object per line. Each message is a self-co
   "message_type": "normal",
   "metadata": {
     "rowid": 12345,
-    "guid": "p:0/1234ABCD-5678-90EF-GHIJ-KLMNOPQRSTUV",
-    "date": 1732723800000,
-    "date_read": 1732723875000,
-    "date_delivered": 1732723802000,
-    "date_edited": null,
+    "guid": "1234ABCD-5678-90EF-GHIJ-KLMNOPQRSTUV",
+    "date": "2024-11-27T15:30:00+0000",
+    "date_read": "2024-11-27T15:31:15+0000",
+    "date_delivered": "2024-11-27T15:30:02+0000",
     "service": "iMessage",
     "is_from_me": false,
     "is_read": true,
@@ -228,11 +227,10 @@ Each `.ndjson` file contains one JSON object per line. Each message is a self-co
     "chat_identifier": "chat123456",
     "display_name": "Project Team",
     "service_name": "iMessage",
-    "participants": ["chat123456"]
+    "participants": ["+15551234567", "+15559876543"]
   },
   "content": {
     "text": "Hey, check this out!",
-    "subject": null,
     "components": [
       {
         "type": "text",
@@ -242,18 +240,25 @@ Each `.ndjson` file contains one JSON object per line. Each message is a self-co
     ]
   },
   "relationships": {
-    "thread_originator_guid": null,
-    "thread_originator_part": null,
-    "num_replies": 0,
-    "tapbacks": [],
-    "edit_history": null
-  },
-  "expressive_effect": null,
-  "group_action": null
+    "num_replies": 2,
+    "tapbacks": [
+      {
+        "tapback_type": "loved",
+        "added_by": {
+          "handle_id": 3,
+          "identifier": "+15559876543",
+          "contact_name": "John Smith"
+        },
+        "timestamp": "2024-11-27T15:32:00+0000",
+        "message_part_index": 0,
+        "is_from_me": false
+      }
+    ]
+  }
 }
 ```
 
-**Note:** Timestamps are Unix milliseconds. Dates from `imessage-db` are pre-converted from Apple's Cocoa epoch.
+**Note:** Timestamps are ISO 8601 strings. Optional fields (`date_edited`, `date_delivered`, `subject`, `thread_originator_guid`, `expressive_effect`, `edit_history`, `announcement`) are omitted from JSON when null.
 
 ### Schema Documentation
 

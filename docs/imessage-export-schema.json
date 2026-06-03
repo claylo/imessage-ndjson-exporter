@@ -16,7 +16,8 @@
       "properties": {
         "message_type": {
           "type": "string",
-          "description": "The type of message (e.g., 'iMessage', 'SMS')."
+          "enum": ["normal", "tapback", "edited", "announcement"],
+          "description": "The structural type of message: 'normal' (standard message), 'tapback' (reaction), 'edited' (has edit history), 'announcement' (group action or system event)."
         },
         "metadata": { "$ref": "#/$defs/MessageMetadata" },
         "sender": { "$ref": "#/$defs/SerializableSender" },
@@ -413,27 +414,27 @@
     },
     "ExpressiveEffect_Screen": {
       "type": "object",
-      "description": "A full-screen send effect (e.g., balloons, confetti, fireworks).",
+      "description": "A full-screen send effect.",
       "required": ["type", "effect"],
       "additionalProperties": false,
       "properties": {
         "type": { "const": "screen" },
         "effect": {
           "type": "string",
-          "description": "The screen effect name."
+          "description": "The screen effect name (e.g., 'spotlight', 'hearts', 'balloons', 'confetti', 'fireworks', 'lasers', 'shooting_star', 'sparkles', 'echo')."
         }
       }
     },
     "ExpressiveEffect_Bubble": {
       "type": "object",
-      "description": "A bubble send effect (e.g., slam, loud, gentle, invisible ink).",
+      "description": "A bubble send effect.",
       "required": ["type", "effect"],
       "additionalProperties": false,
       "properties": {
         "type": { "const": "bubble" },
         "effect": {
           "type": "string",
-          "description": "The bubble effect name."
+          "description": "The bubble effect name (e.g., 'gentle', 'slam', 'loud', 'invisible_ink')."
         }
       }
     },
@@ -627,7 +628,8 @@
       "properties": {
         "tapback_type": {
           "type": "string",
-          "description": "The type of tapback (e.g., 'heart', 'like', 'dislike', 'laugh', 'emphasis', 'question')."
+          "enum": ["loved", "liked", "disliked", "laughed", "emphasized", "questioned", "emoji", "sticker"],
+          "description": "The type of tapback reaction."
         },
         "emoji": {
           "type": "string",
