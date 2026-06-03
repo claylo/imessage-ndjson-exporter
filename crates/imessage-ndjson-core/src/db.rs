@@ -138,14 +138,19 @@ impl Database {
 
             let batch_len = batch.len() as i64;
             for msg in batch {
-                // Tapbacks have associated_message_type set (e.g. "love", "like", etc.)
+                // Tapbacks have associated_message_type set to a reaction name
+                // (None means type 0 = normal message, not a tapback)
                 if msg.associated_message_type.is_some()
-                    && let Some(ref guid) = msg.associated_message_guid {
-                        tapback_map
-                            .entry(guid.clone())
-                            .or_default()
-                            .push(msg);
-                    }
+                    && let Some(clean_guid) = msg
+                        .associated_message_guid
+                        .as_deref()
+                        .and_then(parse_target_guid)
+                {
+                    tapback_map
+                        .entry(clean_guid.to_string())
+                        .or_default()
+                        .push(msg);
+                }
             }
 
             offset += batch_len;
@@ -189,5 +194,36 @@ impl Database {
             }
         }
         map
+    }
+}
+
+/// Extract the clean 36-char target message GUID from an associated_message_guid value.
+///
+/// The raw value can be in several formats:
+/// - `"p:N/GUID"` — tapback on part N of the message
+/// - `"bp:GUID"` — tapback on the whole message (bubble)
+/// - `"GUID"` — bare GUID
+pub(crate) fn parse_target_guid(raw: &str) -> Option<&str> {
+    if let Some(rest) = raw.strip_prefix("p:") {
+        // "p:0/F445FB06-..." -> skip past the slash
+        let guid = rest.split_once('/')?.1;
+        guid.get(..36)
+    } else if let Some(rest) = raw.strip_prefix("bp:") {
+        rest.get(..36)
+    } else {
+        raw.get(..36)
+    }
+}
+
+/// Extract the part index from an associated_message_guid value.
+///
+/// Returns the component index the tapback targets (0 for single-component messages).
+pub(crate) fn parse_tapback_part_index(raw: &str) -> usize {
+    if let Some(rest) = raw.strip_prefix("p:") {
+        rest.split_once('/')
+            .and_then(|(idx, _)| idx.parse().ok())
+            .unwrap_or(0)
+    } else {
+        0
     }
 }
