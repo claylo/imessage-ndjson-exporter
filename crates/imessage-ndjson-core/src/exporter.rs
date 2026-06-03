@@ -19,11 +19,10 @@ use crate::{
         chat::{SerializableChatContext, SerializableSender},
         content::{ContentComponent, SerializableContent, TextAttribute, TextEffect},
         message::{
-            MessageMetadata, SerializableAnnouncement, SerializableGroupAction,
-            SerializableMessage,
+            MessageMetadata, SerializableAnnouncement, SerializableGroupAction, SerializableMessage,
         },
         participant::SerializableParticipant,
-        relationships::SerializableRelationships,
+        relationships::{SerializableRelationships, SerializableTapback},
     },
 };
 
@@ -67,9 +66,7 @@ impl NdjsonExporter {
         use chrono::NaiveDate;
 
         // Parse start date to Unix milliseconds (inclusive)
-        let start_timestamp = start_date
-            .map(|s| parse_date_to_unix_ms(&s))
-            .transpose()?;
+        let start_timestamp = start_date.map(|s| parse_date_to_unix_ms(&s)).transpose()?;
 
         // Parse end date to Unix milliseconds (exclusive - add 1 day)
         let end_timestamp = end_date
@@ -223,10 +220,7 @@ impl NdjsonExporter {
             let chat_ids = self.resolve_filtered_chats(&db, &contacts_index, &handles, &chats)?;
 
             if chat_ids.is_empty() {
-                anyhow::bail!(
-                    "Filter '{}' does not match any conversations",
-                    filter
-                );
+                anyhow::bail!("Filter '{}' does not match any conversations", filter);
             }
 
             if self.show_progress {
@@ -292,9 +286,10 @@ impl NdjsonExporter {
         for (chat_id, chat) in &chats {
             // Skip if not in selected set
             if let Some(ref selected) = selected_chat_ids
-                && !selected.contains(chat_id) {
-                    continue;
-                }
+                && !selected.contains(chat_id)
+            {
+                continue;
+            }
 
             let message_count = self.export_chat(
                 &db,
@@ -387,11 +382,8 @@ impl NdjsonExporter {
         let mut writer = BufWriter::new(file);
 
         // Get messages for this chat using the chat's guid
-        let messages = db.messages_for_chat(
-            &chat.guid,
-            self.start_timestamp,
-            self.end_timestamp,
-        )?;
+        let messages =
+            db.messages_for_chat(&chat.guid, self.start_timestamp, self.end_timestamp)?;
 
         let mut message_count = 0;
 
@@ -433,7 +425,7 @@ impl NdjsonExporter {
         chat_id: i64,
         chat: &Chat,
         handles: &HashMap<i64, Handle>,
-        _tapbacks: &TapbackResolver,
+        tapbacks: &TapbackResolver,
         contact_resolver: &mut ContactResolver,
         attachment_manager: &mut Option<AttachmentManager>,
     ) -> Result<SerializableMessage> {
@@ -464,12 +456,14 @@ impl NdjsonExporter {
         // Build content
         let content = self.build_content(msg, chat_id, attachment_manager)?;
 
-        // Build relationships
+        // Build relationships — resolve tapbacks from cache
+        let resolved_tapbacks =
+            self.resolve_tapbacks(&msg.guid, tapbacks, handles, contact_resolver);
         let relationships = SerializableRelationships {
             thread_originator_guid: msg.thread_originator_guid.clone(),
             thread_originator_part: msg.thread_originator_part.clone(),
             num_replies: 0, // imessage-db doesn't track reply counts directly
-            tapbacks: vec![],   // TODO: Implement tapback resolution
+            tapbacks: resolved_tapbacks,
             edit_history: None, // TODO: Implement edit history
         };
 
@@ -506,21 +500,91 @@ impl NdjsonExporter {
 
         let handle_id = msg.handle_id;
         if handle_id > 0
-            && let Some(handle) = handles.get(&handle_id) {
-                let id = handle.id.clone();
-                let name = contact_resolver.resolve_name(&id, false);
-                return SerializableSender {
-                    handle_id: Some(handle_id),
-                    identifier: id,
-                    contact_name: name,
-                };
-            }
+            && let Some(handle) = handles.get(&handle_id)
+        {
+            let id = handle.id.clone();
+            let name = contact_resolver.resolve_name(&id, false);
+            return SerializableSender {
+                handle_id: Some(handle_id),
+                identifier: id,
+                contact_name: name,
+            };
+        }
 
         SerializableSender {
             handle_id: if handle_id > 0 { Some(handle_id) } else { None },
             identifier: "Unknown".to_string(),
             contact_name: None,
         }
+    }
+
+    /// Resolve tapbacks for a message GUID into serializable structs.
+    ///
+    /// Processes add/remove pairs: if someone adds a tapback then removes it,
+    /// the removal cancels the add. Each person can have at most one active
+    /// tapback per message part.
+    fn resolve_tapbacks(
+        &self,
+        message_guid: &str,
+        tapbacks: &TapbackResolver,
+        handles: &HashMap<i64, Handle>,
+        contact_resolver: &mut ContactResolver,
+    ) -> Vec<SerializableTapback> {
+        let tapback_msgs = match tapbacks.get_tapbacks(message_guid) {
+            Some(msgs) => msgs,
+            None => return vec![],
+        };
+
+        // Track active tapbacks: (sender_key, part_index) -> SerializableTapback
+        // sender_key: -1 for "from me", otherwise handle_id
+        let mut active: HashMap<(i64, usize), SerializableTapback> = HashMap::new();
+
+        for tb in tapback_msgs {
+            let reaction = match tb.associated_message_type.as_deref() {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let is_removal = reaction.starts_with('-');
+            let part_index = tb
+                .associated_message_guid
+                .as_deref()
+                .map(crate::db::parse_tapback_part_index)
+                .unwrap_or(0);
+            let sender_key = if tb.is_from_me { -1 } else { tb.handle_id };
+            let key = (sender_key, part_index);
+
+            if is_removal {
+                active.remove(&key);
+            } else {
+                let tapback_type = match reaction {
+                    "love" => "loved",
+                    "like" => "liked",
+                    "dislike" => "disliked",
+                    "laugh" => "laughed",
+                    "emphasize" => "emphasized",
+                    "question" => "questioned",
+                    "emoji" => "emoji",
+                    "sticker" | "sticker-tapback" => "sticker",
+                    other => other,
+                };
+
+                let sender = self.build_sender(tb, handles, contact_resolver);
+                active.insert(
+                    key,
+                    SerializableTapback {
+                        tapback_type: tapback_type.to_string(),
+                        emoji: tb.associated_message_emoji.clone(),
+                        added_by: sender,
+                        timestamp: format_timestamp_ms(tb.date),
+                        message_part_index: part_index,
+                        is_from_me: tb.is_from_me,
+                    },
+                );
+            }
+        }
+
+        active.into_values().collect()
     }
 
     fn build_chat_context(&self, chat: &Chat) -> SerializableChatContext {
@@ -561,13 +625,14 @@ impl NdjsonExporter {
 
         // Build text component if there's text
         if let Some(ref text_str) = text
-            && !text_str.is_empty() {
-                let attributes = build_text_attributes(msg);
-                components.push(ContentComponent::Text {
-                    text: text_str.clone(),
-                    attributes,
-                });
-            }
+            && !text_str.is_empty()
+        {
+            let attributes = build_text_attributes(msg);
+            components.push(ContentComponent::Text {
+                text: text_str.clone(),
+                attributes,
+            });
+        }
 
         // Handle retracted messages
         if msg.date_retracted.is_some() && text.is_none() && msg.attachments.is_empty() {
@@ -576,10 +641,7 @@ impl NdjsonExporter {
 
         // Handle attachments (eager-loaded on the message)
         for att in &msg.attachments {
-            let original_path = att
-                .filename
-                .as_ref()
-                .map(|f| resolve_attachment_path(f));
+            let original_path = att.filename.as_ref().map(|f| resolve_attachment_path(f));
 
             // Track converted MIME type
             let mut converted_mime_type: Option<String> = None;
@@ -665,14 +727,15 @@ impl NdjsonExporter {
 
         // Handle app messages
         if let Some(ref bundle_id) = msg.balloon_bundle_id
-            && !bundle_id.is_empty() {
-                components.push(ContentComponent::App {
-                    balloon_bundle_id: bundle_id.clone(),
-                    app_name: None,
-                    app_type: "balloon".to_string(),
-                    metadata: None,
-                });
-            }
+            && !bundle_id.is_empty()
+        {
+            components.push(ContentComponent::App {
+                balloon_bundle_id: bundle_id.clone(),
+                app_name: None,
+                app_type: "balloon".to_string(),
+                metadata: None,
+            });
+        }
 
         Ok(SerializableContent {
             text,
@@ -828,17 +891,19 @@ fn build_announcement(msg: &Message) -> Option<SerializableAnnouncement> {
 fn get_message_text(msg: &Message) -> Option<String> {
     // msg.text is already populated by imessage-db
     if let Some(ref text) = msg.text
-        && !text.is_empty() {
-            return Some(text.clone());
-        }
+        && !text.is_empty()
+    {
+        return Some(text.clone());
+    }
 
     // Fallback: decode attributed_body blob
     if let Some(ref body) = msg.attributed_body
         && !body.is_empty()
-            && let Some(text) = imessage_core::typedstream::extract_text(body)
-                && !text.is_empty() {
-                    return Some(text);
-                }
+        && let Some(text) = imessage_core::typedstream::extract_text(body)
+        && !text.is_empty()
+    {
+        return Some(text);
+    }
 
     None
 }
