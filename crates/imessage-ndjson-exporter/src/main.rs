@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use imessage_ndjson_core::{attachment_manager::CompressionMode, NdjsonExporter};
+use imessage_ndjson_core::{NdjsonExporter, attachment_manager::CompressionMode};
 use std::path::PathBuf;
 
 mod cli;
